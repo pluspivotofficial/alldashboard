@@ -82,6 +82,7 @@ const MCGI = {
   phone: 3,        // D 電話番号
   age: 4,          // E 年齢
   pref: 6,         // G 都道府県
+  media: 8,        // I 応募媒体
   contactStatus: 9,// J 接触ステータス
   qual: 18,        // S 福祉資格(有資格判定)
   exp: 19,         // T 介護経験
@@ -192,6 +193,15 @@ function runDailyAggregation(monthArg) {
     acc[office] = newOfficeAcc_(office, officePrefs[office], targets[office] || 0);
   });
 
+  // --- 媒体×オフィス 集計器（出現したものを随時作成） ---
+  const mediaMap = {};
+  const macc_ = (media, office) => {
+    media = media || '不明'; office = office || '不明';
+    const m = mediaMap[media] || (mediaMap[media] = {});
+    return m[office] || (m[office] = newMediaAcc_());
+  };
+  const reUniqMediaOffice = {}; // media -> office -> Set(phone)  再応募の電話ユニーク化
+
   // 人選参照表: ⑤を4条件で判定し、電話→区分（A/B/C/other）を作る
   mcgRows.forEach(row => {
     const p = normPhone_(row[MCGI.phone]);
@@ -203,6 +213,7 @@ function runDailyAggregation(monthArg) {
   const parsed = totalRows.map(r => ({
     office: r[COL.total.office] || prefToOffice[(r[COL.total.pref] || '').trim()],
     phone: normPhone_(r[COL.total.phone]),
+    media: normMedia_(r[COL.total.media]),
     d: parseDate_(r[COL.total.applyDate]),
   })).filter(x => x.d);
   parsed.sort((a, b) => a.d - b.d);
@@ -220,13 +231,17 @@ function runDailyAggregation(monthArg) {
     if (!x.office || !acc[x.office] || !inRange_(x.d, range.monthStart, range.monthEnd)) return;
     const key = fmtDate_(x.d);
     dailyMap[key] = dailyMap[key] || { new: 0, re: 0 };
+    const mo = macc_(x.media, x.office);
     if (x.first) {                                    // 初回=新規（電話ユニーク）
       acc[x.office].overview.newApplications += 1;
-      if (isAB(x.phone)) acc[x.office].overview.newAB += 1;
+      mo.overview.newApplications += 1;
+      if (isAB(x.phone)) { acc[x.office].overview.newAB += 1; mo.overview.newAB += 1; }
       dailyMap[key].new += 1;
     } else {                                          // 2回目以降=再応募（電話ユニーク）
       const set = reUniqByOffice[x.office] || (reUniqByOffice[x.office] = new Set());
       set.add(x.phone);
+      const mm = reUniqMediaOffice[x.media] || (reUniqMediaOffice[x.media] = {});
+      (mm[x.office] || (mm[x.office] = new Set())).add(x.phone); // 媒体×オフィスでも電話ユニーク
       rePhoneInMonth[x.phone] = true;                 // 当月の再応募者
       if (!reDailySeen[x.phone]) { reDailySeen[x.phone] = true; dailyMap[key].re += 1; } // 日次もユニーク
     }
@@ -236,6 +251,14 @@ function runDailyAggregation(monthArg) {
     acc[o].overview.reApplications = set.size;
     set.forEach(p => { if (isAB(p)) acc[o].overview.reAB += 1; }); // 再応募A+B（電話ユニーク）
   });
+  Object.keys(reUniqMediaOffice).forEach(media => {
+    Object.keys(reUniqMediaOffice[media]).forEach(office => {
+      const set = reUniqMediaOffice[media][office];
+      const mo = macc_(media, office);
+      mo.overview.reApplications = set.size;
+      set.forEach(p => { if (isAB(p)) mo.overview.reAB += 1; });
+    });
+  });
 
   // --- ⑤ MCG人選: 電話応募・接触数・歩留・人選（列はインデックス参照） ---
   const phoneAppSeen = {};       // office → Set(電話)：電話応募のユニーク化
@@ -243,6 +266,8 @@ function runDailyAggregation(monthArg) {
     const office = prefToOffice[(row[MCGI.pref] || '').toString().trim()];
     if (!office || !acc[office]) return;
     const phone = normPhone_(row[MCGI.phone]);
+    const media = normMedia_(row[MCGI.media]);
+    const mo = macc_(media, office);
     const d = parseDate_(row[MCGI.applyDate]);
     const inMonth = inRange_(d, range.monthStart, range.monthEnd);
     const letter = judgeFromRow_(row);
@@ -255,7 +280,9 @@ function runDailyAggregation(monthArg) {
         seen[phone] = true;
         acc[office].overview.phoneApplications += 1;
         acc[office].overview.newApplications += 1;
-        if (ab) acc[office].overview.newAB += 1;
+        mo.overview.phoneApplications += 1;
+        mo.overview.newApplications += 1;
+        if (ab) { acc[office].overview.newAB += 1; mo.overview.newAB += 1; }
         firstDateByPhone[phone] = d; // 歩留でも当月の新規扱い
       }
     }
@@ -263,10 +290,11 @@ function runDailyAggregation(monthArg) {
     // 接触数（当月応募）
     if (inMonth && (row[MCGI.contactStatus] || '').toString().trim().indexOf(CONTACT_PREFIX) === 0) {
       acc[office].overview.contacts += 1;
+      mo.overview.contacts += 1;
     }
 
     // 人選（当月応募・A/B/C/その他）
-    if (inMonth) bumpSelection_(acc[office].selection, letter);
+    if (inMonth) { bumpSelection_(acc[office].selection, letter); bumpSelection_(mo.selection, letter); }
 
     // 歩留: コホート(初回応募日で判定) × 各ステージ「日付列が当月のもの」をカウント
     // 当月内応募・新規 ⊂ 2ヶ月以内応募・新規（当月含む直近2ヶ月）なので両方に加算しうる。
@@ -279,11 +307,12 @@ function runDailyAggregation(monthArg) {
     if (rePhoneInMonth[phone]) cohorts.push('reApplication'); // 当月に再応募した人のみ
     cohorts.forEach(c => {
       const f = acc[office].funnel[c];
+      const fm = mo.funnel[c];
       FUNNEL_STAGES.forEach(([outKey, idxKey]) => {
         const sd = parseDate_(row[MCGI[idxKey]]);
-        if (inRange_(sd, range.monthStart, range.monthEnd)) f[outKey] += 1; // その日付が当月
+        if (inRange_(sd, range.monthStart, range.monthEnd)) { f[outKey] += 1; fm[outKey] += 1; } // その日付が当月
       });
-      if (ab && phone) f._abPhones.add(phone);
+      if (ab && phone) { f._abPhones.add(phone); fm._abPhones.add(phone); }
     });
   });
 
@@ -296,6 +325,23 @@ function runDailyAggregation(monthArg) {
     Object.values(o.funnel).forEach(f => { f.ab = f._abPhones.size; delete f._abPhones; });
   });
 
+  // 媒体集計の仕上げ: funnel ab を確定 → 媒体ごとに（オフィス内訳＋合計）を構築
+  Object.keys(mediaMap).forEach(media => {
+    Object.keys(mediaMap[media]).forEach(office => {
+      Object.values(mediaMap[media][office].funnel).forEach(f => { f.ab = f._abPhones.size; delete f._abPhones; });
+    });
+  });
+  const mediaOut = Object.keys(mediaMap).map(media => {
+    const offices = Object.keys(mediaMap[media]).map(office => ({
+      office: office,
+      overview: mediaMap[media][office].overview,
+      selection: mediaMap[media][office].selection,
+      funnel: mediaMap[media][office].funnel,
+    })).filter(mediaOfficeHasData_).sort((a, b) => b.overview.newApplications - a.overview.newApplications);
+    const tot = sumMediaOffices_(offices);
+    return { media: media, overview: tot.overview, selection: tot.selection, funnel: tot.funnel, offices: offices };
+  }).filter(m => m.offices.length > 0).sort((a, b) => b.overview.newApplications - a.overview.newApplications);
+
   const daily = Object.keys(dailyMap).sort().map(k => ({
     date: k, new: dailyMap[k].new, re: dailyMap[k].re, total: dailyMap[k].new + dailyMap[k].re,
   }));
@@ -305,6 +351,7 @@ function runDailyAggregation(monthArg) {
     month: month,
     daily: daily,
     offices: Object.values(acc).filter(hasAnyData_),
+    media: mediaOut,
   };
 
   saveSummary_(month, JSON.stringify(summary));
@@ -343,6 +390,49 @@ function bumpSelection_(sel, letter) {
   else if (letter === 'C') sel.C += 1;
   else if (letter === 'other') sel.other += 1;
   else sel.unknown += 1;
+}
+
+/* 応募媒体の表記ゆれを統合。
+ *   「キューメイト」を含む（Indeed（キューメイト）/スタンバイ（キューメイト）/求人ボックス（キューメイト）等）→ キューメイト
+ *   直接の indeed/Indeed → Indeed
+ *   それ以外は原文のまま（空は不明）。 */
+function normMedia_(m) {
+  const s = (m || '').toString().trim();
+  if (!s) return '不明';
+  if (s.indexOf('キューメイト') >= 0) return 'キューメイト';
+  if (/indeed/i.test(s)) return 'Indeed';
+  return s;
+}
+
+// 媒体集計の空集計器（funnelは集計中のみ _abPhones を持つ）
+function newMediaAcc_() {
+  const fnl = () => ({ set: 0, done: 0, decided: 0, started: 0, ab: 0, _abPhones: new Set() });
+  return {
+    overview: { newApplications: 0, phoneApplications: 0, reApplications: 0, contacts: 0, newAB: 0, reAB: 0 },
+    selection: { A: 0, B: 0, C: 0, other: 0, unknown: 0 },
+    funnel: { currentMonthNew: fnl(), within2MonthsNew: fnl(), reApplication: fnl() },
+  };
+}
+
+function mediaOfficeHasData_(mo) {
+  const v = mo.overview, s = mo.selection;
+  return v.newApplications || v.reApplications || v.contacts || (s.A + s.B + s.C + s.other + s.unknown);
+}
+
+// 媒体内の複数オフィス集計を合算して媒体合計を作る
+function sumMediaOffices_(offices) {
+  const overview = { newApplications: 0, phoneApplications: 0, reApplications: 0, contacts: 0, newAB: 0, reAB: 0 };
+  const selection = { A: 0, B: 0, C: 0, other: 0, unknown: 0 };
+  const zf = () => ({ set: 0, done: 0, decided: 0, started: 0, ab: 0 });
+  const funnel = { currentMonthNew: zf(), within2MonthsNew: zf(), reApplication: zf() };
+  offices.forEach(mo => {
+    Object.keys(overview).forEach(k => overview[k] += mo.overview[k]);
+    Object.keys(selection).forEach(k => selection[k] += mo.selection[k]);
+    ['currentMonthNew', 'within2MonthsNew', 'reApplication'].forEach(c => {
+      ['set', 'done', 'decided', 'started', 'ab'].forEach(k => funnel[c][k] += mo.funnel[c][k]);
+    });
+  });
+  return { overview: overview, selection: selection, funnel: funnel };
 }
 
 // 人選ｽﾃｰﾀｽの表示ラベル（シート表記に合わせる）

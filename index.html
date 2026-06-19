@@ -100,14 +100,36 @@
   .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--muted);padding:10px 16px 0}
   th.ref,td.refcol{color:var(--coral)}
   .hidden{display:none}
+
+  /* sidebar layout */
+  .app{display:flex;align-items:stretch;min-height:100vh}
+  .sidebar{flex:0 0 196px;background:var(--navy);color:#fff;padding:16px 12px;position:sticky;top:0;height:100vh}
+  .sidebar .brand{font-size:13px;font-weight:700;letter-spacing:.02em;padding:4px 8px 14px;border-bottom:1px solid rgba(255,255,255,.16);margin-bottom:12px}
+  .nav-item{display:block;width:100%;text-align:left;background:transparent;border:none;color:#cfd6ee;font:inherit;font-weight:600;font-size:13px;padding:10px 12px;border-radius:8px;cursor:pointer;margin-bottom:4px}
+  .nav-item:hover{background:rgba(255,255,255,.08);color:#fff}
+  .nav-item.active{background:#fff;color:var(--navy)}
+  .main{flex:1 1 auto;min-width:0}
+  .main .wrap{margin:0}
+  @media(max-width:720px){
+    .app{display:block}
+    .sidebar{position:static;height:auto;display:flex;gap:6px;flex-wrap:wrap;padding:10px 12px}
+    .sidebar .brand{display:none}
+    .nav-item{width:auto;margin-bottom:0}
+  }
 </style>
 </head>
 <body>
-<div class="wrap">
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">📊 応募ダッシュボード</div>
+    <button class="nav-item active" id="navOffice" data-sec="office">🏢 オフィス別</button>
+    <button class="nav-item" id="navMedia" data-sec="media">📣 媒体別</button>
+  </aside>
+  <div class="main"><div class="wrap">
   <header class="top">
     <div class="title">
-      <h1>応募ダッシュボード</h1>
-      <p>オフィス別｜総応募・MCG・人選を突合した集計ビュー</p>
+      <h1 id="secTitle">応募ダッシュボード</h1>
+      <p id="secSub">オフィス別｜総応募・MCG・人選を突合した集計ビュー</p>
     </div>
     <div class="controls">
       <select id="monthSel">
@@ -118,6 +140,8 @@
     </div>
   </header>
 
+  <!-- ===== オフィス別セクション ===== -->
+  <div id="officeSection">
   <!-- 一覧ビュー -->
   <div id="listView">
     <div class="kpis" id="kpis"></div>
@@ -140,9 +164,17 @@
 
   <!-- 詳細ビュー -->
   <div id="detailView" class="hidden"></div>
+  </div><!-- /officeSection -->
+
+  <!-- ===== 媒体別セクション ===== -->
+  <div id="mediaSection" class="hidden">
+    <div id="mediaListView"></div>
+    <div id="mediaDetailView" class="hidden"></div>
+  </div>
 
   <p class="updated" id="updated"></p>
-</div>
+  </div></div><!-- /wrap /main -->
+</div><!-- /app -->
 
 <script>
 /* ============================================================
@@ -341,9 +373,110 @@ function selectCurrentMonth(){
   sel.value = Array.from(sel.options).some(o=>o.value===cur) ? cur : sel.options[sel.options.length-1].value;
 }
 
+/* ===== 媒体別ビュー ===== */
+const mSelTotal = o => ["A","B","C","other","unknown"].reduce((a,k)=>a+(o.selection[k]||0),0);
+
+function renderMediaList(){
+  const media = DATA.media || [];
+  const selTotal = ["A","B","C","other","unknown"].reduce((a,k)=>a+sum(media,"selection."+k),0);
+  const kpi=(l,v,s)=>`<div class="kpi"><div class="k-label">${l}</div><div class="k-val">${v}</div><div class="k-sub">${s}</div></div>`;
+  const kpis=[
+    kpi("媒体数",num(media.length),"Indeed・キューメイトは統合"),
+    kpi("新規応募（合計）",num(sum(media,"overview.newApplications")),"うち電話 "+num(sum(media,"overview.phoneApplications"))),
+    kpi("再応募（合計）",num(sum(media,"overview.reApplications")),""),
+    kpi("人選数（合計）",num(selTotal),"A〜不明"),
+    kpi("接触数（合計）",num(sum(media,"overview.contacts")),"MCG由来")
+  ].join("");
+  const rows=media.map((m,i)=>{
+    const v=m.overview;
+    return `<tr class="click" data-i="${i}">
+      <td class="l office">${m.media}</td>
+      <td>${num(v.newApplications)}</td>
+      <td>${num(v.reApplications)}</td>
+      <td>${num(v.phoneApplications)}</td>
+      <td>${num(v.contacts)}</td>
+      <td>${num(mSelTotal(m))}</td>
+      <td class="refcol">${num(v.newAB+v.reAB)}</td>
+    </tr>`;
+  }).join("");
+  $("#mediaListView").innerHTML=`
+    <div class="kpis">${kpis}</div>
+    <div class="panel">
+      <div class="panel-head"><h2>媒体一覧</h2><span class="hint">行をクリックでオフィス別の内訳へ</span></div>
+      <div class="scroll"><table>
+        <thead><tr><th class="l">媒体</th><th>新規応募</th><th>再応募</th><th>電話応募</th><th>接触数</th><th>人選数</th><th class="ref">A+B人選</th></tr></thead>
+        <tbody>${rows||`<tr><td class="l" colspan="7">媒体データがありません（GAS再集計後に表示されます）</td></tr>`}</tbody>
+        <tfoot><tr><td class="l">合計</td><td>${num(sum(media,"overview.newApplications"))}</td><td>${num(sum(media,"overview.reApplications"))}</td><td>${num(sum(media,"overview.phoneApplications"))}</td><td>${num(sum(media,"overview.contacts"))}</td><td>${num(selTotal)}</td><td>${num(sum(media,"overview.newAB")+sum(media,"overview.reAB"))}</td></tr></tfoot>
+      </table></div>
+    </div>`;
+  document.querySelectorAll("#mediaListView tr.click").forEach(tr=>tr.addEventListener("click",()=>showMediaDetail(+tr.dataset.i)));
+}
+
+function showMediaDetail(i){
+  const m=DATA.media[i], v=m.overview, offs=m.offices||[];
+  const stat=(l,val,sub="")=>`<div class="stat"><div class="s-l">${l}</div><div class="s-v">${num(val)}</div>${sub?`<div class="s-l">${sub}</div>`:""}</div>`;
+  const summary=`<div class="panel"><div class="panel-head"><h2>① 応募サマリー</h2><span class="hint">${DATA.month}</span></div>
+    <div class="stat-grid">
+      ${stat("新規応募",v.newApplications,"うちA+B人選 "+num(v.newAB))}
+      ${stat("うち電話応募",v.phoneApplications)}
+      ${stat("再応募",v.reApplications,"うちA+B人選 "+num(v.reAB))}
+      ${stat("接触数",v.contacts)}
+      ${stat("人選数",mSelTotal(m),"A〜不明の合計")}
+    </div></div>`;
+  const s=m.selection;
+  const selCard=(cls,val,l)=>`<div class="sel ${cls}"><div class="s-v">${num(val)}</div><div class="s-l">${l}</div></div>`;
+  const selection=`<div class="panel"><div class="panel-head"><h2>② 人選判定</h2><span class="hint">人数</span></div>
+    <div class="sel-grid">
+      ${selCard("tagA",s.A,"A人選")}${selCard("tagB",s.B,"B人選")}${selCard("tagC",s.C,"C人選")}${selCard("tagO",s.other,"その他")}${selCard("tagU",s.unknown,"不明")}
+    </div></div>`;
+  const orows=offs.map(o=>{const ov=o.overview;return `<tr>
+      <td class="l office">${o.office}</td>
+      <td>${num(ov.newApplications)}</td>
+      <td>${num(ov.reApplications)}</td>
+      <td>${num(ov.phoneApplications)}</td>
+      <td>${num(ov.contacts)}</td>
+      <td>${num(["A","B","C","other","unknown"].reduce((a,k)=>a+(o.selection[k]||0),0))}</td>
+      <td class="refcol">${num(ov.newAB+ov.reAB)}</td>
+    </tr>`;}).join("");
+  const officeTable=`<div class="panel"><div class="panel-head"><h2>③ オフィス別パフォーマンス</h2><span class="hint">${m.media}</span></div>
+    <div class="scroll"><table>
+      <thead><tr><th class="l">オフィス</th><th>新規応募</th><th>再応募</th><th>電話応募</th><th>接触数</th><th>人選数</th><th class="ref">A+B人選</th></tr></thead>
+      <tbody>${orows||`<tr><td class="l" colspan="7">データなし</td></tr>`}</tbody>
+    </table></div></div>`;
+  $("#mediaDetailView").innerHTML=`
+    <button class="back" id="mBack">← 媒体一覧に戻る</button>
+    <div class="detail-head"><h2>${m.media}</h2>
+      <span style="margin-left:auto;display:flex;gap:6px"><button id="mPrev">‹ 前</button><button id="mNext">次 ›</button></span>
+    </div>
+    ${summary}${selection}${officeTable}`;
+  $("#mediaListView").classList.add("hidden");
+  $("#mediaDetailView").classList.remove("hidden");
+  $("#mBack").addEventListener("click",showMediaList);
+  $("#mPrev").addEventListener("click",()=>showMediaDetail((i-1+DATA.media.length)%DATA.media.length));
+  $("#mNext").addEventListener("click",()=>showMediaDetail((i+1)%DATA.media.length));
+  window.scrollTo(0,0);
+}
+function showMediaList(){ $("#mediaDetailView").classList.add("hidden"); $("#mediaListView").classList.remove("hidden"); }
+
+/* ===== セクション切替（サイドバー） ===== */
+function switchSection(sec){
+  const isMedia = sec==="media";
+  $("#officeSection").classList.toggle("hidden", isMedia);
+  $("#mediaSection").classList.toggle("hidden", !isMedia);
+  $("#navOffice").classList.toggle("active", !isMedia);
+  $("#navMedia").classList.toggle("active", isMedia);
+  $("#secTitle").textContent = isMedia ? "媒体別パフォーマンス" : "応募ダッシュボード";
+  $("#secSub").textContent = isMedia
+    ? "応募媒体ごと｜オフィス別の内訳まで（Indeed・キューメイトは統合）"
+    : "オフィス別｜総応募・MCG・人選を突合した集計ビュー";
+  if(isMedia){ renderMediaList(); showMediaList(); } else { showList(); }
+}
+
 function render(){
   if(!DATA.daily||!DATA.daily.length) DATA.daily=genDaily(DATA.month); // モック補完
-  renderList(); showList();
+  renderList(); renderMediaList();
+  const mediaActive = !$("#mediaSection").classList.contains("hidden");
+  if(mediaActive) showMediaList(); else showList();
   const tag = API_URL ? "" : "（モックデータ）";
   $("#updated").textContent="集計時刻: "+new Date(DATA.generatedAt).toLocaleString("ja-JP")+tag;
 }
@@ -358,6 +491,8 @@ async function refresh(){
 }
 $("#refreshBtn").addEventListener("click",refresh);
 $("#monthSel").addEventListener("change",refresh);
+$("#navOffice").addEventListener("click",()=>switchSection("office"));
+$("#navMedia").addEventListener("click",()=>switchSection("media"));
 selectCurrentMonth();
 refresh();
 </script>
