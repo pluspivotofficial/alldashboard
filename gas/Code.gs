@@ -150,6 +150,9 @@ function runDailyAggregation(monthArg) {
   // 0) 統合ツールが出した未処理CSVを総応募シート末尾へ追記（失敗しても集計は続行）
   try { appendNewTotalCsvs(); } catch (e) { Logger.log('append skipped: ' + e); }
 
+  // 0.3) 同じ応募が二重追記された行を除去（再アップロード・連打しても重複しない）
+  try { dedupeSheet_(); } catch (e) { Logger.log('dedupe skipped: ' + e); }
+
   // 0.5) シートの「対応オフィス」「新規/再応募」をGASで判定して書き込む（ツール任せにしない）
   try { fillDerivedColumns_(); } catch (e) { Logger.log('fillDerived skipped: ' + e); }
 
@@ -573,6 +576,48 @@ function markExistingCsvsProcessed() {
   }
   PropertiesService.getScriptProperties().setProperty('appendedCsvIds', JSON.stringify(ids));
   Logger.log('追記済みとして記録: %s ファイル', ids.length);
+}
+
+/* =========================================================================
+ * 重複行の除去（同じ応募の二重追記を掃除）
+ *   署名 = 応募日 | 電話 | 氏名 | 媒体（GASが付ける派生列は含めない）。
+ *   同署名は最初の1件だけ残す。電話が空の行は誤削除を避けるため対象外（常に残す）。
+ *   再アップロードや連打で全く同じ行が入っても、次の集計時に自動で掃除される。
+ * ========================================================================= */
+function dedupeSheet_() {
+  const sh = SpreadsheetApp.openById(CONFIG.TOTAL_SHEET_ID).getSheets()[0];
+  const lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
+  if (lastRow < 3) return;
+  const all = sh.getRange(1, 1, lastRow, lastCol).getValues();
+  const header = all[0].map(h => (h || '').toString().trim());
+  const idx = names => { for (let k = 0; k < names.length; k++) { const i = header.indexOf(names[k]); if (i >= 0) return i; } return -1; };
+  const dIdx = idx([COL.total.applyDate, '応募日']);
+  const pIdx = idx([COL.total.phone, '連絡先TEL', '電話番号']);
+  const nIdx = idx(['氏名（漢字）', '氏名']);
+  const mIdx = idx([COL.total.media, '媒体']);
+  if (dIdx < 0 || pIdx < 0) { Logger.log('dedupe: キー列が見つからない date=%s phone=%s', dIdx, pIdx); return; }
+
+  const seen = {};
+  const kept = [all[0]];
+  let removed = 0;
+  for (let r = 1; r < all.length; r++) {
+    const row = all[r];
+    const phone = normPhone_(row[pIdx]);
+    if (!phone) { kept.push(row); continue; } // 電話なしは判定困難なので常に残す
+    const sig = [
+      (row[dIdx] || '').toString().trim(),
+      phone,
+      nIdx >= 0 ? (row[nIdx] || '').toString().trim() : '',
+      mIdx >= 0 ? (row[mIdx] || '').toString().trim() : '',
+    ].join('|');
+    if (seen[sig]) { removed++; continue; }
+    seen[sig] = true;
+    kept.push(row);
+  }
+  if (!removed) { Logger.log('dedupe: 重複なし'); return; }
+  sh.getRange(1, 1, kept.length, lastCol).setValues(kept);
+  sh.getRange(kept.length + 1, 1, lastRow - kept.length, lastCol).clearContent(); // 末尾の余剰行を消す
+  Logger.log('dedupe: %s 行を重複として削除（%s→%s 行）', removed, lastRow - 1, kept.length - 1);
 }
 
 /* =========================================================================
