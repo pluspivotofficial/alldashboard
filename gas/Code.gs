@@ -52,7 +52,15 @@ const CONFIG = {
   // ※GASの時間トリガーは厳密な定刻ではなく前後に幅がある（nearMinureで7:30近辺に寄せる）。
   DAILY_TRIGGER_HOUR: 7,
   DAILY_TRIGGER_MINUTE: 30,
+
+  // 統合ツール(obo-data-tool)からの doPost アップロードを認証する合言葉。
+  // ※クライアント側(公開HTML)にも同じ値を置くため強固な秘密ではない（社内用途の簡易ガード）。
+  UPLOAD_TOKEN: 'NMrci23nQlpFLFSpAQb3113A',
 };
+
+// CSV→シート追記時のヘッダー名ゆらぎ吸収（シート列名 → 許容するCSV列名の別名）。
+// 統合ツールは「応募日」で出力するが、累積シートの列名は「（応募内容）応募日」のため対応づける。
+const HEADER_ALIASES = { '（応募内容）応募日': ['応募日'] };
 
 // 列名（実ヘッダーに準拠）
 const COL = {
@@ -100,6 +108,37 @@ function doGet(e) {
   if (!json) json = readSummaryFromDrive_(month);
   if (!json) json = JSON.stringify({ error: 'summary not generated yet', month: month });
   return ContentService.createTextOutput(json).setMimeType(ContentService.MimeType.JSON);
+}
+
+// 統合ツール(obo-data-tool)が「Driveへ連携」したCSVを受け取る。
+//   token … CONFIG.UPLOAD_TOKEN と一致必須
+//   csv   … 統合済みCSV本文（フォームエンコードで送信＝CORSプリフライト回避）
+// 受領後: TOTAL_FOLDER_ID に新ファイル保存 → そのまま追記＆当月集計まで実行（ダッシュボード即更新）。
+function doPost(e) {
+  try {
+    const p = (e && e.parameter) || {};
+    if (p.token !== CONFIG.UPLOAD_TOKEN) return jsonOut_({ ok: false, error: 'unauthorized' });
+    const csv = p.csv;
+    if (!csv) return jsonOut_({ ok: false, error: 'no csv body' });
+
+    const name = '応募データ統合_' + Utilities.formatDate(new Date(), CONFIG.TZ, 'yyyyMMdd_HHmmss') + '.csv';
+    DriveApp.getFolderById(CONFIG.TOTAL_FOLDER_ID).createFile(name, csv, 'text/csv'); // まず保存（失敗しても7:30トリガーが拾う）
+
+    let summary = null;
+    try { summary = runDailyAggregation(); } catch (err) { Logger.log('post-aggregate failed: ' + err); }
+    return jsonOut_({
+      ok: true,
+      savedFile: name,
+      month: summary && summary.month,
+      offices: summary ? summary.offices.length : null,
+    });
+  } catch (err) {
+    return jsonOut_({ ok: false, error: String(err) });
+  }
+}
+
+function jsonOut_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
 
 /* =========================================================================
@@ -502,8 +541,15 @@ function appendNewTotalCsvs() {
     const csvHeader = data[0].map(h => (h || '').replace(/^﻿/, '').trim());
     const idxByName = {};
     csvHeader.forEach((h, i) => { if (idxByName[h] === undefined) idxByName[h] = i; });
+    // シート列名 → CSV列インデックス。名前一致が無ければ別名(HEADER_ALIASES)も探す。
+    const colIndex = h => {
+      if (idxByName[h] !== undefined) return idxByName[h];
+      const alts = HEADER_ALIASES[h] || [];
+      for (let k = 0; k < alts.length; k++) if (idxByName[alts[k]] !== undefined) return idxByName[alts[k]];
+      return null;
+    };
     // シートの列順に合わせて値を並べ替えて追記（CSVの列順が違っても安全）
-    const rows = data.slice(1).map(r => sheetHeader.map(h => { const i = idxByName[h]; return i == null ? '' : r[i]; }));
+    const rows = data.slice(1).map(r => sheetHeader.map(h => { const i = colIndex(h); return i == null ? '' : r[i]; }));
     if (rows.length) sh.getRange(sh.getLastRow() + 1, 1, rows.length, sheetHeader.length).setValues(rows);
     done.add(f.getId());
     appended += rows.length;
