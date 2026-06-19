@@ -398,12 +398,14 @@ function bumpSelection_(sel, letter) {
 /* 応募媒体の表記ゆれを統合。
  *   「キューメイト」を含む（Indeed（キューメイト）/スタンバイ（キューメイト）/求人ボックス（キューメイト）等）→ キューメイト
  *   直接の indeed/Indeed → Indeed
+ *   「自社」を含む（自社/自社（会員登録）/自社（電話）/自社（求人応募）等）→ 自社
  *   それ以外は原文のまま（空は不明）。 */
 function normMedia_(m) {
   const s = (m || '').toString().trim();
   if (!s) return '不明';
   if (s.indexOf('キューメイト') >= 0) return 'キューメイト';
   if (/indeed/i.test(s)) return 'Indeed';
+  if (s.indexOf('自社') >= 0) return '自社';
   return s;
 }
 
