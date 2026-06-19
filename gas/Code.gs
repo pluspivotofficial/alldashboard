@@ -239,9 +239,12 @@ function runDailyAggregation(monthArg) {
       dailyMap[key].new += 1;
     } else {                                          // 2回目以降=再応募（電話ユニーク）
       const set = reUniqByOffice[x.office] || (reUniqByOffice[x.office] = new Set());
+      const firstReInOffice = !set.has(x.phone);      // このオフィスでこの電話の初回再応募か
       set.add(x.phone);
-      const mm = reUniqMediaOffice[x.media] || (reUniqMediaOffice[x.media] = {});
-      (mm[x.office] || (mm[x.office] = new Set())).add(x.phone); // 媒体×オフィスでも電話ユニーク
+      if (firstReInOffice) {                          // 初回再応募の媒体に1回だけ計上（オフィス合計と一致させる）
+        const mm = reUniqMediaOffice[x.media] || (reUniqMediaOffice[x.media] = {});
+        (mm[x.office] || (mm[x.office] = new Set())).add(x.phone);
+      }
       rePhoneInMonth[x.phone] = true;                 // 当月の再応募者
       if (!reDailySeen[x.phone]) { reDailySeen[x.phone] = true; dailyMap[key].re += 1; } // 日次もユニーク
     }
