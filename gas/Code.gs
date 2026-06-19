@@ -48,8 +48,10 @@ const CONFIG = {
   CACHE_TTL_SEC: 21600, // 6時間
   TZ: 'Asia/Tokyo',
 
-  // 毎日トリガーの実行時刻（時）。統合ツールが朝8時までにCSVを出すので、その後に走る9時台に設定。
-  DAILY_TRIGGER_HOUR: 9,
+  // 毎日トリガーの実行時刻。統合ツールが朝7時までにCSVを出すので、その後の7:30前後に実行。
+  // ※GASの時間トリガーは厳密な定刻ではなく前後に幅がある（nearMinureで7:30近辺に寄せる）。
+  DAILY_TRIGGER_HOUR: 7,
+  DAILY_TRIGGER_MINUTE: 30,
 };
 
 // 列名（実ヘッダーに準拠）
@@ -531,5 +533,6 @@ function installDailyTrigger() {
   ScriptApp.getProjectTriggers().forEach(t => {
     if (t.getHandlerFunction() === 'runDailyAggregation') ScriptApp.deleteTrigger(t);
   });
-  ScriptApp.newTrigger('runDailyAggregation').timeBased().everyDays(1).atHour(CONFIG.DAILY_TRIGGER_HOUR).create();
+  ScriptApp.newTrigger('runDailyAggregation').timeBased().everyDays(1)
+    .atHour(CONFIG.DAILY_TRIGGER_HOUR).nearMinute(CONFIG.DAILY_TRIGGER_MINUTE).create();
 }

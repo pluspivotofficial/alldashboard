@@ -30,7 +30,7 @@
 2. メニューで `runForMay2026` を実行（データのある 2026-05 で動作確認）→ 権限承認。
 3. ログ（offices / dailyPoints）と、親フォルダに `2026-05_summary.json` ができることを確認。
 4. **`markExistingCsvsProcessed` を一度だけ実行** → フォルダに今あるCSVを「追記済み」として記録（既にシートに入っている分の二重追記を防ぐ）。
-5. `installDailyTrigger` を実行 → 毎朝9時台の自動集計を登録（CONFIG.DAILY_TRIGGER_HOUR）。
+5. `installDailyTrigger` を実行 → 毎朝7:30前後の自動集計を登録（CONFIG.DAILY_TRIGGER_HOUR / _MINUTE）。
 6. 「デプロイ > 新しいデプロイ > ウェブアプリ」: アクセス=全員。発行URLを控える。
 7. `dashboard/index.html` の `API_URL` にそのURLを設定（フロント接続）。
 
@@ -44,9 +44,9 @@
 ## 総応募シートへのCSV追記（自動フロー）
 毎朝の流れ:
 ```
-[〜8:00] 統合ツールが前日の応募データCSVを TOTAL_FOLDER_ID に出力
+[〜7:00] 統合ツールが前日の応募データCSVを TOTAL_FOLDER_ID に出力
    ▼
-[9時台] 毎日トリガー → runDailyAggregation()
+[7:30前後] 毎日トリガー → runDailyAggregation()
    ├ appendNewTotalCsvs()  : フォルダ内の未処理CSVを古い順に TOTAL_SHEET_ID 末尾へ全追記
    └ 集計 → {month}_summary.json 更新
    ▼
