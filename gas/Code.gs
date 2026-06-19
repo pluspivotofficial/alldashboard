@@ -150,6 +150,9 @@ function runDailyAggregation(monthArg) {
   // 0) 統合ツールが出した未処理CSVを総応募シート末尾へ追記（失敗しても集計は続行）
   try { appendNewTotalCsvs(); } catch (e) { Logger.log('append skipped: ' + e); }
 
+  // 0.5) シートの「対応オフィス」「新規/再応募」をGASで判定して書き込む（ツール任せにしない）
+  try { fillDerivedColumns_(); } catch (e) { Logger.log('fillDerived skipped: ' + e); }
+
   // --- マスタ ---
   const prefToOffice = loadPrefToOffice_();          // { '東京都':'新宿オフィス', ... }
   const officePrefs = invertPrefMap_(prefToOffice);  // { '新宿オフィス':['東京都','埼玉県',...] }
@@ -570,6 +573,72 @@ function markExistingCsvsProcessed() {
   }
   PropertiesService.getScriptProperties().setProperty('appendedCsvIds', JSON.stringify(ids));
   Logger.log('追記済みとして記録: %s ファイル', ids.length);
+}
+
+/* =========================================================================
+ * シートの派生列を埋める（対応オフィス・新規/再応募）
+ *   - 対応オフィス … マスタ(都道府県→オフィス)で判定。ダッシュボードと同じ基準。
+ *   - 新規/再応募 … 累積シート全体を応募日昇順で見て、電話番号の初出=新規 / 以降=再応募。
+ *   どちらの列も無ければ末尾に作る。連携・毎日トリガーのたびに全行を再計算（自己修正）。
+ * ========================================================================= */
+function fillDerivedColumns_() {
+  const sh = SpreadsheetApp.openById(CONFIG.TOTAL_SHEET_ID).getSheets()[0];
+  const lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
+  if (lastRow < 2) return;
+  const header = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(h => (h || '').toString().trim());
+  const findCol = names => { for (let k = 0; k < names.length; k++) { const i = header.indexOf(names[k]); if (i >= 0) return i; } return -1; };
+
+  const prefIdx = findCol(['都道府県名', '都道府県']);
+  const phoneIdx = findCol([COL.total.phone, '連絡先TEL', '電話番号']);
+  const dateIdx = findCol([COL.total.applyDate, '応募日']);
+  if (prefIdx < 0 || phoneIdx < 0 || dateIdx < 0) {
+    Logger.log('fillDerived: 必要列が見つからない pref=%s phone=%s date=%s', prefIdx, phoneIdx, dateIdx);
+    return;
+  }
+
+  // 出力先列（無ければ末尾に追加）
+  let officeIdx = findCol(['対応オフィス', COL.total.office]); // 対応オフィス or 拠点
+  let dupIdx = findCol(['新規/再応募', '重複判定']);
+  let nextCol = lastCol;
+  if (officeIdx < 0) { officeIdx = nextCol++; sh.getRange(1, officeIdx + 1).setValue('対応オフィス'); }
+  if (dupIdx < 0) { dupIdx = nextCol++; sh.getRange(1, dupIdx + 1).setValue('新規/再応募'); }
+
+  const prefToOffice = loadPrefToOffice_();
+  const n = lastRow - 1;
+  const prefCol = sh.getRange(2, prefIdx + 1, n, 1).getValues();
+  const phoneCol = sh.getRange(2, phoneIdx + 1, n, 1).getValues();
+  const dateCol = sh.getRange(2, dateIdx + 1, n, 1).getValues();
+  const officeCur = officeIdx < lastCol ? sh.getRange(2, officeIdx + 1, n, 1).getValues() : null;
+
+  // 重複判定: 応募日のある行を昇順に処理し、電話初出=新規 / 以降=再応募。日付なし行は後段で処理。
+  const firstSeen = {};
+  const dup = new Array(n);
+  const dated = [];
+  for (let i = 0; i < n; i++) { const d = parseDate_(dateCol[i][0]); if (d) dated.push({ i: i, d: d, phone: normPhone_(phoneCol[i][0]) }); }
+  dated.sort((a, b) => a.d - b.d);
+  dated.forEach(r => {
+    if (!r.phone) { dup[r.i] = '新規'; return; }
+    if (!firstSeen[r.phone]) { firstSeen[r.phone] = true; dup[r.i] = '新規'; } else { dup[r.i] = '再応募'; }
+  });
+  for (let i = 0; i < n; i++) {
+    if (dup[i]) continue;
+    const phone = normPhone_(phoneCol[i][0]);
+    if (!phone) { dup[i] = '新規'; continue; }
+    if (!firstSeen[phone]) { firstSeen[phone] = true; dup[i] = '新規'; } else { dup[i] = '再応募'; }
+  }
+
+  // 対応オフィス: マスタ優先（都道府県で判定）。都道府県が空/未対応なら既存値を維持。
+  const officeOut = new Array(n);
+  const dupOut = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const pref = (prefCol[i][0] || '').toString().trim();
+    const cur = officeCur ? (officeCur[i][0] || '').toString().trim() : '';
+    officeOut[i] = [prefToOffice[pref] || cur || ''];
+    dupOut[i] = [dup[i] || ''];
+  }
+  sh.getRange(2, officeIdx + 1, n, 1).setValues(officeOut);
+  sh.getRange(2, dupIdx + 1, n, 1).setValues(dupOut);
+  Logger.log('派生列を更新: 行=%s 対応オフィス列=%s 新規再応募列=%s', n, officeIdx + 1, dupIdx + 1);
 }
 
 /* =========================================================================
