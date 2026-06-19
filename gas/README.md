@@ -29,9 +29,10 @@
 1. [script.google.com](https://script.google.com) で新規プロジェクト → `Code.gs` / `appsscript.json` を貼り付け。
 2. メニューで `runForMay2026` を実行（データのある 2026-05 で動作確認）→ 権限承認。
 3. ログ（offices / dailyPoints）と、親フォルダに `2026-05_summary.json` ができることを確認。
-4. `installDailyTrigger` を実行 → 毎朝6時の自動集計を登録。
-5. 「デプロイ > 新しいデプロイ > ウェブアプリ」: アクセス=全員。発行URLを控える。
-6. `dashboard/index.html` の `API_URL` にそのURLを設定（フロント接続）。
+4. **`markExistingCsvsProcessed` を一度だけ実行** → フォルダに今あるCSVを「追記済み」として記録（既にシートに入っている分の二重追記を防ぐ）。
+5. `installDailyTrigger` を実行 → 毎朝9時台の自動集計を登録（CONFIG.DAILY_TRIGGER_HOUR）。
+6. 「デプロイ > 新しいデプロイ > ウェブアプリ」: アクセス=全員。発行URLを控える。
+7. `dashboard/index.html` の `API_URL` にそのURLを設定（フロント接続）。
 
 ## 確定した集計ルール
 1. **新規/再応募** … 総応募は累積スプレッドシート（`TOTAL_SHEET_ID`、全履歴）。応募日昇順で**電話番号の初出=新規 / 以降=再応募**（重複応募・有効応募列は不使用）。再応募は電話でユニーク化。**日次グラフの再応募も電話ユニーク**（各人を月内最初の再応募日に1計上）。
@@ -40,11 +41,21 @@
 4. **歩留** … 各ステージの日付列が**当月**のものをカウント。コホートは初回応募日で判定（当月内 ⊂ 2ヶ月以内）。
 5. **人選判定** … ⑤を**GASで4条件判定**（列インデックス参照）。有資格(福祉資格に「有資格」)／介護経験=有／勤務日数に「LT」／年齢60未満 の該当数で **4=A・3=B・2=C・0-1=その他**。
 
-## 総応募シートへのCSV追記（自動）
-- `runDailyAggregation` の冒頭で `appendLatestTotalCsv()` を自動実行（毎日トリガーに同梱）。
-- `appendLatestTotalCsv()` … `TOTAL_FOLDER_ID` の最新CSVを `TOTAL_SHEET_ID` の末尾へ追記（列名マッピング・二重追記防止）。
-- **自動化を有効にする前に一度だけ `markLatestCsvProcessed()` を実行**：現在フォルダにある古いCSV（既にシート取込済み）を「追記済み」として記録し、二重追記を防ぐ。
-- 以後は応募ツールが新しいCSVをフォルダに吐けば、翌朝の集計時に自動追記される。
+## 総応募シートへのCSV追記（自動フロー）
+毎朝の流れ:
+```
+[〜8:00] 統合ツールが前日の応募データCSVを TOTAL_FOLDER_ID に出力
+   ▼
+[9時台] 毎日トリガー → runDailyAggregation()
+   ├ appendNewTotalCsvs()  : フォルダ内の未処理CSVを古い順に TOTAL_SHEET_ID 末尾へ全追記
+   └ 集計 → {month}_summary.json 更新
+   ▼
+ダッシュボード(GitHub Pages) が doGet 経由で最新を表示
+```
+- `appendNewTotalCsvs()` … `TOTAL_FOLDER_ID` 内の**まだ取り込んでいないCSVを全て**古い順に `TOTAL_SHEET_ID` 末尾へ追記。取込済みファイルIDは ScriptProperties (`appendedCsvIds`) に集合で記録するため、**二重追記なし・トリガーが1日飛んでも翌日まとめて取込**。
+- 列名は CSV ヘッダー → シートヘッダーの順にマッピングするので、CSVの列順が違っても安全。
+- **自動化を有効にする前に一度だけ `markExistingCsvsProcessed()` を実行**：現在フォルダにあるCSV（既にシート取込済み）を「追記済み」として記録し、二重追記を防ぐ。
+- 前提: 統合ツールは**毎朝新しいCSVファイル**として `TOTAL_FOLDER_ID` に出力すること（同名で上書きせず別ファイルにする）。CSVは「前日分（増分）」を想定。
 
 ## 出力JSON
 設計書セクション5のスキーマと同一。`dashboard/index.html` の `SAMPLE_DATA` が参照例。

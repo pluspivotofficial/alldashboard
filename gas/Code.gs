@@ -26,7 +26,7 @@
 const CONFIG = {
   // 総応募データ（累積スプレッドシート。全履歴を保持し重複判定に使う）
   TOTAL_SHEET_ID: '1p4CA-RwYwmfA2JMflNMVK7SMVrXHC7AtW54XN2xIZT8',
-  // 応募ツールが吐くCSVの置き場所（appendLatestTotalCsv で上記シート末尾へ追記）
+  // 応募ツールが吐くCSVの置き場所（appendNewTotalCsvs で上記シート末尾へ追記）
   TOTAL_FOLDER_ID: '1VvdyRw6Fd2ox-GWQXMhSsapROLNFNbEC',
   SELECTION_FOLDER_ID: '12GI5yYIje9h8YOetRJs3R20olCn5fe2e',  // MCG人選データ(⑤) 接触/歩留/人選
   MCG_FOLDER_ID: '1CsO0ATFsQCKMZBmGSLP6lVdbxhH2ng3E',        // MCG稼働データ(③) ※予約
@@ -47,6 +47,9 @@ const CONFIG = {
   CACHE_KEY: 'dashboard_summary_v1',
   CACHE_TTL_SEC: 21600, // 6時間
   TZ: 'Asia/Tokyo',
+
+  // 毎日トリガーの実行時刻（時）。統合ツールが朝8時までにCSVを出すので、その後に走る9時台に設定。
+  DAILY_TRIGGER_HOUR: 9,
 };
 
 // 列名（実ヘッダーに準拠）
@@ -103,8 +106,8 @@ function doGet(e) {
 function runDailyAggregation(monthArg) {
   const month = monthArg || currentMonthKey_();
 
-  // 0) 応募ツールの最新CSVを総応募シート末尾へ追記（失敗しても集計は続行）
-  try { appendLatestTotalCsv(); } catch (e) { Logger.log('append skipped: ' + e); }
+  // 0) 統合ツールが出した未処理CSVを総応募シート末尾へ追記（失敗しても集計は続行）
+  try { appendNewTotalCsvs(); } catch (e) { Logger.log('append skipped: ' + e); }
 
   // --- マスタ ---
   const prefToOffice = loadPrefToOffice_();          // { '東京都':'新宿オフィス', ... }
@@ -472,35 +475,53 @@ function normPhone_(v) { return (v || '').toString().replace(/[^0-9]/g, ''); }
  *   ※ 既に同じデータがシートに入っている古いCSVを残したまま実行すると二重追記に
  *      なるので、フォルダには「新しく吐き出したCSV」だけを置く運用にする。
  * ========================================================================= */
-function appendLatestTotalCsv() {
-  const f = latestCsvFile_(CONFIG.TOTAL_FOLDER_ID);
-  if (!f) { Logger.log('追記対象のCSVなし'); return; }
+function appendNewTotalCsvs() {
   const props = PropertiesService.getScriptProperties();
-  const KEY = 'lastAppendedCsvId';
-  if (props.getProperty(KEY) === f.getId()) { Logger.log('追記済み: ' + f.getName()); return; }
+  const KEY = 'appendedCsvIds';
+  const done = new Set(JSON.parse(props.getProperty(KEY) || '[]')); // 取込済みファイルIDの集合
 
-  const data = Utilities.parseCsv((f.getBlob().getDataAsString(CONFIG.CHARSET_TOTAL) || '').replace(/^﻿/, ''));
-  if (data.length < 2) { Logger.log('CSVが空'); return; }
-  const csvHeader = data[0].map(h => (h || '').replace(/^﻿/, '').trim());
-  const idxByName = {};
-  csvHeader.forEach((h, i) => { if (idxByName[h] === undefined) idxByName[h] = i; });
+  // フォルダ内の未処理CSVを集める（毎朝の新ファイルを取りこぼさない）
+  const files = DriveApp.getFolderById(CONFIG.TOTAL_FOLDER_ID).getFiles();
+  const pending = [];
+  while (files.hasNext()) {
+    const f = files.next();
+    if (f.getName().toLowerCase().slice(-4) === '.csv' && !done.has(f.getId())) pending.push(f);
+  }
+  if (!pending.length) { Logger.log('追記対象の新規CSVなし'); return; }
+  pending.sort((a, b) => a.getLastUpdated() - b.getLastUpdated()); // 古い順に追記して時系列を保つ
 
   const sh = SpreadsheetApp.openById(CONFIG.TOTAL_SHEET_ID).getSheets()[0];
   const sheetHeader = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(h => (h || '').toString().trim());
-  // シートの列順に合わせて値を並べ替えて追記（CSVの列順が違っても安全）
-  const rows = data.slice(1).map(r => sheetHeader.map(h => { const i = idxByName[h]; return i == null ? '' : r[i]; }));
-  if (rows.length) sh.getRange(sh.getLastRow() + 1, 1, rows.length, sheetHeader.length).setValues(rows);
-  props.setProperty(KEY, f.getId());
-  Logger.log('追記 %s 行 (%s)', rows.length, f.getName());
+
+  let appended = 0;
+  pending.forEach(f => {
+    const data = Utilities.parseCsv((f.getBlob().getDataAsString(CONFIG.CHARSET_TOTAL) || '').replace(/^﻿/, ''));
+    if (data.length < 2) { Logger.log('CSVが空: ' + f.getName()); done.add(f.getId()); return; }
+    const csvHeader = data[0].map(h => (h || '').replace(/^﻿/, '').trim());
+    const idxByName = {};
+    csvHeader.forEach((h, i) => { if (idxByName[h] === undefined) idxByName[h] = i; });
+    // シートの列順に合わせて値を並べ替えて追記（CSVの列順が違っても安全）
+    const rows = data.slice(1).map(r => sheetHeader.map(h => { const i = idxByName[h]; return i == null ? '' : r[i]; }));
+    if (rows.length) sh.getRange(sh.getLastRow() + 1, 1, rows.length, sheetHeader.length).setValues(rows);
+    done.add(f.getId());
+    appended += rows.length;
+    Logger.log('追記 %s 行 (%s)', rows.length, f.getName());
+  });
+  props.setProperty(KEY, JSON.stringify(Array.from(done)));
+  Logger.log('追記合計 %s 行 / %s ファイル', appended, pending.length);
 }
 
-// 初期化用: フォルダにある現在の最新CSVを「追記済み」として記録だけする（追記はしない）。
-// 既に総応募シートへ取り込み済みの古いCSVが二重追記されるのを防ぐため、自動化の前に1回実行する。
-function markLatestCsvProcessed() {
-  const f = latestCsvFile_(CONFIG.TOTAL_FOLDER_ID);
-  if (!f) { Logger.log('CSVなし'); return; }
-  PropertiesService.getScriptProperties().setProperty('lastAppendedCsvId', f.getId());
-  Logger.log('追記済みとして記録: ' + f.getName());
+// 初期化用: フォルダに今ある全CSVを「追記済み」として記録だけする（追記はしない）。
+// 既に総応募シートへ取り込み済みのCSVが二重追記されるのを防ぐため、自動化の前に1回だけ実行する。
+function markExistingCsvsProcessed() {
+  const files = DriveApp.getFolderById(CONFIG.TOTAL_FOLDER_ID).getFiles();
+  const ids = [];
+  while (files.hasNext()) {
+    const f = files.next();
+    if (f.getName().toLowerCase().slice(-4) === '.csv') ids.push(f.getId());
+  }
+  PropertiesService.getScriptProperties().setProperty('appendedCsvIds', JSON.stringify(ids));
+  Logger.log('追記済みとして記録: %s ファイル', ids.length);
 }
 
 /* =========================================================================
@@ -510,5 +531,5 @@ function installDailyTrigger() {
   ScriptApp.getProjectTriggers().forEach(t => {
     if (t.getHandlerFunction() === 'runDailyAggregation') ScriptApp.deleteTrigger(t);
   });
-  ScriptApp.newTrigger('runDailyAggregation').timeBased().everyDays(1).atHour(6).create();
+  ScriptApp.newTrigger('runDailyAggregation').timeBased().everyDays(1).atHour(CONFIG.DAILY_TRIGGER_HOUR).create();
 }
