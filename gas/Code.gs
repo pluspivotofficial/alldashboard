@@ -160,6 +160,9 @@ function runDailyAggregation(monthArg) {
   // 0) 統合ツールが出した未処理CSVを総応募シート末尾へ追記（失敗しても集計は続行）
   try { appendNewTotalCsvs(); } catch (e) { Logger.log('append skipped: ' + e); }
 
+  // 0.2) 媒体も電話も空の不要行を除去（人選CSV等が誤って総応募に混入した行を掃除）
+  try { purgeJunkRows_(); } catch (e) { Logger.log('purge skipped: ' + e); }
+
   // 0.3) 同じ応募が二重追記された行を除去（再アップロード・連打しても重複しない）
   try { dedupeSheet_(); } catch (e) { Logger.log('dedupe skipped: ' + e); }
 
@@ -622,6 +625,34 @@ function markExistingCsvsProcessed() {
   }
   PropertiesService.getScriptProperties().setProperty('appendedCsvIds', JSON.stringify(ids));
   Logger.log('追記済みとして記録: %s ファイル', ids.length);
+}
+
+/* =========================================================================
+ * 不要行の除去（媒体も電話も空の行＝人選CSV等の誤混入を掃除）
+ *   正規の総応募行は必ず媒体と電話を持つため、両方空の行は誤って混入したもの。
+ * ========================================================================= */
+function purgeJunkRows_() {
+  const sh = SpreadsheetApp.openById(CONFIG.TOTAL_SHEET_ID).getSheets()[0];
+  const lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
+  if (lastRow < 3) return;
+  const all = sh.getRange(1, 1, lastRow, lastCol).getValues();
+  const header = all[0].map(h => (h || '').toString().trim());
+  const idx = names => { for (let k = 0; k < names.length; k++) { const i = header.indexOf(names[k]); if (i >= 0) return i; } return -1; };
+  const mIdx = idx([COL.total.media, '媒体']);
+  const pIdx = idx([COL.total.phone, '連絡先TEL', '電話番号']);
+  if (mIdx < 0 || pIdx < 0) { Logger.log('purge: 媒体/電話列なし'); return; }
+  const kept = [all[0]];
+  let removed = 0;
+  for (let r = 1; r < all.length; r++) {
+    const media = (all[r][mIdx] || '').toString().trim();
+    const phone = normPhone_(all[r][pIdx]);
+    if (!media && !phone) { removed++; continue; }
+    kept.push(all[r]);
+  }
+  if (!removed) { Logger.log('purge: 不要行なし'); return; }
+  sh.getRange(1, 1, kept.length, lastCol).setValues(kept);
+  sh.getRange(kept.length + 1, 1, lastRow - kept.length, lastCol).clearContent();
+  Logger.log('purge: %s 行を不要行として削除（%s→%s 行）', removed, lastRow - 1, kept.length - 1);
 }
 
 /* =========================================================================
