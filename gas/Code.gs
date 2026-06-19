@@ -28,7 +28,8 @@ const CONFIG = {
   TOTAL_SHEET_ID: '1p4CA-RwYwmfA2JMflNMVK7SMVrXHC7AtW54XN2xIZT8',
   // 応募ツールが吐くCSVの置き場所（appendNewTotalCsvs で上記シート末尾へ追記）
   TOTAL_FOLDER_ID: '1VvdyRw6Fd2ox-GWQXMhSsapROLNFNbEC',
-  SELECTION_FOLDER_ID: '12GI5yYIje9h8YOetRJs3R20olCn5fe2e',  // MCG人選データ(⑤) 接触/歩留/人選
+  SELECTION_FOLDER_ID: '12GI5yYIje9h8YOetRJs3R20olCn5fe2e',  // MCG人選データ(⑤) のフォルダ
+  SENBATSU_SHEET_ID: '1NsC65WFpoSHU3t-1tNboOU1GyFinUeQdMLDf70dghmU', // 当月人選データ（整形先＆人選/接触/歩留の正データ）
   MCG_FOLDER_ID: '1CsO0ATFsQCKMZBmGSLP6lVdbxhH2ng3E',        // MCG稼働データ(③) ※予約
 
   // 出力（summary.json の置き場所。親フォルダに出力）
@@ -121,6 +122,15 @@ function doPost(e) {
     const csv = p.csv;
     if (!csv) return jsonOut_({ ok: false, error: 'no csv body' });
 
+    // type=senbatsu … 人選データCSV。1NsC65W形式へ整形＋人選ｽﾃｰﾀｽを4条件で算出し、当月人選シートを丸ごと置き換える。
+    if (p.type === 'senbatsu') {
+      const rows = writeSenbatsuSheet_(csv);
+      let summary = null;
+      try { summary = runDailyAggregation(); } catch (err) { Logger.log('post-aggregate failed: ' + err); }
+      return jsonOut_({ ok: true, mode: 'senbatsu', rows: rows, month: summary && summary.month });
+    }
+
+    // 既定 … 総応募CSV。TOTAL_FOLDER_IDへ保存→追記＆当月集計。
     const name = '応募データ統合_' + Utilities.formatDate(new Date(), CONFIG.TZ, 'yyyyMMdd_HHmmss') + '.csv';
     DriveApp.getFolderById(CONFIG.TOTAL_FOLDER_ID).createFile(name, csv, 'text/csv'); // まず保存（失敗しても7:30トリガーが拾う）
 
@@ -163,7 +173,7 @@ function runDailyAggregation(monthArg) {
 
   // --- 入力 ---
   const totalRows = readSheetObjects_(CONFIG.TOTAL_SHEET_ID);              // 総応募(累積シート)
-  const mcgRows = readLatestCsvMatrix_(CONFIG.SELECTION_FOLDER_ID, CONFIG.CHARSET_SELECTION); // ⑤(行配列)
+  const mcgRows = readSenbatsuRows_(); // 当月人選シート(1NsC65W)を行配列で（接触/歩留/人選の正データ）
 
   const totalPhoneSet = {};      // 総応募に存在する電話（電話応募判定用）
   const firstDateByPhone = {};   // 電話 → 初回応募日（累積シートでの重複判定）
@@ -330,6 +340,42 @@ function bumpSelection_(sel, letter) {
   else if (letter === 'C') sel.C += 1;
   else if (letter === 'other') sel.other += 1;
   else sel.unknown += 1;
+}
+
+// 人選ｽﾃｰﾀｽの表示ラベル（シート表記に合わせる）
+function senbatsuLabel_(letter) {
+  return { A: 'A人選（★★★★）', B: 'B人選（★★★☆）', C: 'C人選（★★☆☆）' }[letter] || 'その他';
+}
+
+/* =========================================================================
+ * 当月人選シート(1NsC65W)の読み書き
+ * ========================================================================= */
+// 集計用に当月人選シートを行配列（ヘッダー除く）で返す。列はMCGI(列インデックス)準拠。
+function readSenbatsuRows_() {
+  const sh = SpreadsheetApp.openById(CONFIG.SENBATSU_SHEET_ID).getSheets()[0];
+  const vals = sh.getDataRange().getValues();
+  return vals.length < 2 ? [] : vals.slice(1);
+}
+
+// 人選CSV本文を 1NsC65W形式（先頭28列＋人選ｽﾃｰﾀｽ）へ整形し、人選ｽﾃｰﾀｽを4条件で算出して丸ごと置き換える。
+function writeSenbatsuSheet_(csvText) {
+  const SENBATSU_HEADER = ['応募日', '氏名', 'フリガナ', '電話番号', '年齢', '性別', '都道府県', '住所', '応募媒体', '接触ステータス', '登録日', '登録ステータス', '案件番号', '応募日', '人材番号', '所属', '自社人材担当者', '福祉資格', '福祉資格', '介護経験', '★新規就業ステータス', '★新規就業ステータス', '勤務日数', '勤務日数', '設定日（新規）', '実施日（新規）', '決定日（新規）', '開始日（新規）', '人選ｽﾃｰﾀｽ'];
+  const W = SENBATSU_HEADER.length; // 29
+  const data = Utilities.parseCsv((csvText || '').replace(/^﻿/, ''));
+  const out = [SENBATSU_HEADER];
+  for (let i = 1; i < data.length; i++) {
+    const r = data[i];
+    if (!r || !r.some(c => (c || '').toString().trim())) continue;
+    const row = [];
+    for (let k = 0; k < 28; k++) row.push(r[k] != null ? r[k] : ''); // 先頭28列をそのまま
+    row.push(senbatsuLabel_(judgeFromRow_(r)));                       // 人選ｽﾃｰﾀｽ=4条件で算出
+    out.push(row);
+  }
+  const sh = SpreadsheetApp.openById(CONFIG.SENBATSU_SHEET_ID).getSheets()[0];
+  sh.clearContents();
+  sh.getRange(1, 1, out.length, W).setValues(out);
+  Logger.log('人選シート置換: %s 行', out.length - 1);
+  return out.length - 1;
 }
 
 /* =========================================================================
