@@ -334,6 +334,13 @@ function showDetail(i){
 
 function showList(){ $("#detailView").classList.add("hidden"); $("#listView").classList.remove("hidden"); }
 
+/* 月セレクタの既定を当月に。該当オプションが無ければ最後（最新月）を選ぶ。 */
+function selectCurrentMonth(){
+  const sel=$("#monthSel"), now=new Date();
+  const cur=now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0");
+  sel.value = Array.from(sel.options).some(o=>o.value===cur) ? cur : sel.options[sel.options.length-1].value;
+}
+
 function render(){
   if(!DATA.daily||!DATA.daily.length) DATA.daily=genDaily(DATA.month); // モック補完
   renderList(); showList();
@@ -351,6 +358,7 @@ async function refresh(){
 }
 $("#refreshBtn").addEventListener("click",refresh);
 $("#monthSel").addEventListener("change",refresh);
+selectCurrentMonth();
 refresh();
 </script>
 </body>
