@@ -74,8 +74,8 @@
   .meter{display:inline-flex;align-items:center;gap:8px;justify-content:flex-end;width:100%}
   .meter .pct{font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;min-width:38px;text-align:right}
   .meter .track{position:relative;flex:0 0 68px;height:9px;background:#eef0f6;border-radius:6px;overflow:hidden}
-  .meter .track::after{content:"";position:absolute;top:0;bottom:0;left:100%;width:1px;background:#c2c7da} /* 100%目盛り（width基準でtrack端=100%） */
-  .meter .fill{height:100%;border-radius:6px;transition:width .3s}
+  .meter .track::after{content:"";position:absolute;top:0;bottom:0;left:calc(100% - 1px);width:1px;background:#c2c7da} /* 100%目盛り */
+  .meter .fill{display:block;height:100%;border-radius:6px;transition:width .3s}
   .meter.m-red .fill{background:var(--red)}    .meter.m-red .pct{color:var(--red)}
   .meter.m-yellow .fill{background:var(--gold)} .meter.m-yellow .pct{color:#b07d14}
   .meter.m-green .fill{background:var(--green)} .meter.m-green .pct{color:var(--green)}
