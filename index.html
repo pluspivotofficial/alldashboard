@@ -240,7 +240,7 @@ const SAMPLE_DATA = {
 
 /* GAS Web アプリ（doGet）のデプロイURL。空文字のままだと SAMPLE_DATA で動作（モック）。
    本番は "https://script.google.com/macros/s/XXXX/exec" を設定するだけで接続される。 */
-const API_URL = "https://script.google.com/macros/s/AKfycbwNXQ0n3MvefAuG5I6viCrlFk0mBL1mpeUhI18-IXUYsoNpu3I9q0p6pjovLcLoy5k/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbyAmjJUK96m_d7b45mZHrnQRhr8dL3470FRNAobEo62TlTBrpfe0uOgEN0GWmGD3j8/exec";
 async function loadFromApi(month){
   const res = await fetch(`${API_URL}?month=${encodeURIComponent(month)}`);
   if(!res.ok) throw new Error("API "+res.status);
