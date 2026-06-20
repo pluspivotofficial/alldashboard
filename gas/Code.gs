@@ -673,12 +673,16 @@ function readLatestCsvMatrix_(folderId, charset) {
 }
 
 function saveSummary_(month, json) {
-  CacheService.getScriptCache().put(CONFIG.CACHE_KEY + ':' + month, json, CONFIG.CACHE_TTL_SEC);
+  // Driveを先に保存（容量制限なし・確実に永続化）
   const folder = DriveApp.getFolderById(CONFIG.OUTPUT_FOLDER_ID);
   const name = month + '_' + CONFIG.SUMMARY_FILENAME;
   const it = folder.getFilesByName(name);
   if (it.hasNext()) it.next().setContent(json);
   else folder.createFile(name, json, 'application/json');
+  // キャッシュは best-effort（100KB超で put が例外になるため、失敗時は古いキャッシュを消してDrive参照に倒す）
+  const cache = CacheService.getScriptCache(), key = CONFIG.CACHE_KEY + ':' + month;
+  try { cache.put(key, json, CONFIG.CACHE_TTL_SEC); }
+  catch (e) { cache.remove(key); Logger.log('cache skipped (size?): ' + e); }
 }
 
 function readSummaryFromDrive_(month) {
