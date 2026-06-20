@@ -66,6 +66,16 @@
   .bar .fill{height:100%;border-radius:5px;background:var(--coral)}
   .bar .pct{font-size:11px;color:var(--muted);min-width:32px;text-align:right}
 
+  /* 達成率メーター（赤<80 / 黄80-99 / 緑100+） */
+  .meter{display:inline-flex;align-items:center;gap:8px;justify-content:flex-end;width:100%}
+  .meter .pct{font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;min-width:38px;text-align:right}
+  .meter .track{position:relative;flex:0 0 68px;height:9px;background:#eef0f6;border-radius:6px;overflow:hidden}
+  .meter .track::after{content:"";position:absolute;top:0;bottom:0;left:100%;width:1px;background:#c2c7da} /* 100%目盛り（width基準でtrack端=100%） */
+  .meter .fill{height:100%;border-radius:6px;transition:width .3s}
+  .meter.m-red .fill{background:var(--red)}    .meter.m-red .pct{color:var(--red)}
+  .meter.m-yellow .fill{background:var(--gold)} .meter.m-yellow .pct{color:#b07d14}
+  .meter.m-green .fill{background:var(--green)} .meter.m-green .pct{color:var(--green)}
+
   .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700}
   .pill.up{background:var(--green-bg);color:var(--green)}
   .pill.down{background:var(--red-bg);color:var(--red)}
@@ -246,6 +256,12 @@ const $ = s => document.querySelector(s);
 const num = n => (n==null ? "–" : Number(n).toLocaleString("ja-JP"));
 const sum = (arr,path) => arr.reduce((a,o)=>a + path.split(".").reduce((x,k)=>x?.[k] ?? 0, o), 0);
 const pill = d => d>=0 ? `<span class="pill up">+${num(d)}</span>` : `<span class="pill down">${num(d)}</span>`;
+/* 達成率メーター（赤<80 / 黄80-99 / 緑100+） */
+const meter = rate => {
+  const r = Number(rate)||0;
+  const cls = r>=100 ? "m-green" : (r>=80 ? "m-yellow" : "m-red");
+  return `<div class="meter ${cls}"><span class="pct">${r}%</span><span class="track"><span class="fill" style="width:${Math.min(100,Math.max(0,r))}%"></span></span></div>`;
+};
 
 /* ---- KPI ---- */
 function renderKpis(){
@@ -387,7 +403,7 @@ function renderList(){
       <td>${num(v.newApplications)}</td>
       <td>${num(v.reApplications)}</td>
       <td>${num(v.targetNew)}</td>
-      <td><div class="bar"><span class="pct">${rate}%</span><span class="track"><span class="fill" style="width:${Math.min(100,rate)}%;${rate>=100?'background:var(--green)':''}"></span></span></div></td>
+      <td>${meter(rate)}</td>
       <td><span class="pill ${v.forecast>=v.targetNew?'up':'down'}">${num(v.forecast)}</span></td>
       <td>${num(selT(o))}</td>
       <td>${num(v.contacts)}</td>
@@ -415,6 +431,7 @@ function showDetail(i){
       ${stat("うち電話応募",v.phoneApplications,"内訳（MCGのみ）")}
       ${statRef("再応募",v.reApplications,"",v.reAB)}
       ${stat("目標(新規)",v.targetNew)}
+      <div class="stat"><div class="s-l">達成率（新規/目標）</div><div style="margin-top:8px">${meter(rate)}</div></div>
       <div class="stat"><div class="s-l">着地見込み</div><div class="s-v">${num(v.forecast)}</div><div class="s-l">${pill(v.forecast-v.targetNew)} 対目標</div></div>
       ${stat("接触数",v.contacts)}
     </div></div>`;
