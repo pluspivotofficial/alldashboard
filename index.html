@@ -405,15 +405,19 @@ function renderList(){
       <td>${num(v.targetNew)}</td>
       <td>${meter(rate)}</td>
       <td><span class="pill ${v.forecast>=v.targetNew?'up':'down'}">${num(v.forecast)}</span></td>
-      <td>${num(selT(o))}</td>
+      <td>${num(o.selection.A||0)}</td>
+      <td>${num(o.selection.B||0)}</td>
+      <td class="refcol">${num((o.selection.A||0)+(o.selection.B||0))}</td>
+      <td>${num(o.selection.C||0)}</td>
+      <td>${num((o.selection.other||0)+(o.selection.unknown||0))}</td>
       <td>${num(v.contacts)}</td>
     </tr>`;
   }).join("");
   const o=DATA.offices, selTotal=o.reduce((a,x)=>a+selT(x),0);
   $("#listTable").innerHTML=`<table>
-    <thead><tr><th class="l">オフィス</th><th>新規応募</th><th>再応募</th><th>目標(新規)</th><th>達成率</th><th>着地見込み</th><th>人選数</th><th>接触数</th></tr></thead>
+    <thead><tr><th class="l">オフィス</th><th>新規応募</th><th>再応募</th><th>目標(新規)</th><th>達成率</th><th>着地見込み</th><th>A人選</th><th>B人選</th><th class="ref">A+B人選</th><th>C人選</th><th>その他+不明</th><th>接触数</th></tr></thead>
     <tbody>${rows}</tbody>
-    <tfoot><tr><td class="l">合計</td><td>${num(sum(o,"overview.newApplications"))}</td><td>${num(sum(o,"overview.reApplications"))}</td><td>${num(sum(o,"overview.targetNew"))}</td><td></td><td>${num(sum(o,"overview.forecast"))}</td><td>${num(selTotal)}</td><td>${num(sum(o,"overview.contacts"))}</td></tr></tfoot>
+    <tfoot><tr><td class="l">合計</td><td>${num(sum(o,"overview.newApplications"))}</td><td>${num(sum(o,"overview.reApplications"))}</td><td>${num(sum(o,"overview.targetNew"))}</td><td></td><td>${num(sum(o,"overview.forecast"))}</td><td>${num(sum(o,"selection.A"))}</td><td>${num(sum(o,"selection.B"))}</td><td>${num(sum(o,"selection.A")+sum(o,"selection.B"))}</td><td>${num(sum(o,"selection.C"))}</td><td>${num(sum(o,"selection.other")+sum(o,"selection.unknown"))}</td><td>${num(sum(o,"overview.contacts"))}</td></tr></tfoot>
   </table>`;
   document.querySelectorAll("tr.click").forEach(tr=>tr.addEventListener("click",()=>showDetail(+tr.dataset.i)));
 }
