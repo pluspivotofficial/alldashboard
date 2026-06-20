@@ -174,6 +174,7 @@ function runDailyAggregation(monthArg) {
   const prefToOffice = loadPrefToOffice_();          // { '東京都':'新宿オフィス', ... }
   const officePrefs = invertPrefMap_(prefToOffice);  // { '新宿オフィス':['東京都','埼玉県',...] }
   const targets = loadTargets_();                     // { '新宿オフィス':120, ... }
+  const officeArea = loadOfficeArea_();               // { '新宿オフィス':'関東', ... }（多数決）
 
   // --- 入力 ---
   const totalRows = readSheetObjects_(CONFIG.TOTAL_SHEET_ID);              // 総応募(累積シート)
@@ -195,7 +196,7 @@ function runDailyAggregation(monthArg) {
   // --- オフィス集計器（マスタ基準で初期化） ---
   const acc = {};
   Object.keys(officePrefs).forEach(office => {
-    acc[office] = newOfficeAcc_(office, officePrefs[office], targets[office] || 0);
+    acc[office] = newOfficeAcc_(office, officePrefs[office], targets[office] || 0, officeArea[office] || '');
   });
 
   // --- 媒体×オフィス 集計器（出現したものを随時作成） ---
@@ -491,11 +492,12 @@ function writeSenbatsuSheet_(csvText) {
 /* =========================================================================
  * 集計器
  * ========================================================================= */
-function newOfficeAcc_(office, prefs, target) {
+function newOfficeAcc_(office, prefs, target, area) {
   const fnl = () => ({ set: 0, done: 0, decided: 0, started: 0, ab: 0, _abPhones: new Set() });
   return {
     office: office,
     prefectures: prefs,
+    area: area || '',
     overview: { newApplications: 0, phoneApplications: 0, reApplications: 0, targetNew: target, forecast: 0, contacts: 0, newAB: 0, reAB: 0 },
     selection: { A: 0, B: 0, C: 0, other: 0, unknown: 0 },
     funnel: { currentMonthNew: fnl(), within2MonthsNew: fnl(), reApplication: fnl() },
@@ -536,6 +538,28 @@ function loadPrefToOffice_() {
   const map = {};
   parseMaster_(CONFIG.PREF_OFFICE_SHEET_ID, ['都道府県'], ['オフィス', 'オフィス名'])
     .forEach(([pref, office]) => { if (office) map[pref] = office; });
+  return map;
+}
+
+// オフィス → エリア。オフィスが複数エリアにまたがる場合は都道府県の多数決で1エリアに割当。
+function loadOfficeArea_() {
+  const vals = readSheetMatrix_(CONFIG.PREF_OFFICE_SHEET_ID);
+  let hr = -1, cOff = -1, cArea = -1;
+  for (let i = 0; i < vals.length; i++) {
+    const row = vals[i].map(c => (c || '').toString().trim());
+    const io = row.findIndex(c => c === 'オフィス' || c === 'オフィス名');
+    const ia = row.findIndex(c => c === 'エリア');
+    if (io >= 0 && ia >= 0) { hr = i; cOff = io; cArea = ia; break; }
+  }
+  if (hr < 0) { Logger.log('エリア列が見つからない: ' + CONFIG.PREF_OFFICE_SHEET_ID); return {}; }
+  const count = {}; // office -> {area: 件数}
+  for (let i = hr + 1; i < vals.length; i++) {
+    const off = (vals[i][cOff] || '').toString().trim(), area = (vals[i][cArea] || '').toString().trim();
+    if (!off || !area) continue;
+    (count[off] = count[off] || {})[area] = (count[off][area] || 0) + 1;
+  }
+  const map = {};
+  Object.keys(count).forEach(off => { map[off] = Object.keys(count[off]).sort((a, b) => count[off][b] - count[off][a])[0]; });
   return map;
 }
 

@@ -56,6 +56,8 @@
   td.pref{font-size:11px;color:var(--muted);font-weight:400}
   td.ref{color:var(--muted);font-size:12px}
   tfoot td{background:#f4f5fb;font-weight:700;color:var(--navy);border-top:2px solid var(--line)}
+  tr.subtotal td{background:#eef1fa;font-weight:700;color:var(--navy-soft);border-top:1px solid var(--line)}
+  tr.subtotal td.l{color:var(--navy)}
 
   tr.click{cursor:pointer}
   tr.click:hover{background:#f0f3ff}
@@ -393,33 +395,39 @@ function renderChart(){
 }
 
 /* ---- 一覧テーブル（人選数つき・クリックで詳細） ---- */
+const AREA_ORDER=["東北","関東","中日本","関西","九州"];
+/* オフィス1件ぶんの数値セル（行/小計/合計で共通） */
+function officeCells(v,sel){
+  const rate=v.targetNew?Math.min(999,Math.round(v.forecast/v.targetNew*100)):0;
+  const ou=(sel.other||0)+(sel.unknown||0);
+  return `<td>${num(v.newApplications)}</td><td>${num(v.reApplications)}</td><td>${num(v.targetNew)}</td>`+
+    `<td>${meter(rate)}</td>`+
+    `<td><span class="pill ${v.forecast>=v.targetNew?'up':'down'}">${num(v.forecast)}</span></td>`+
+    `<td>${num(sel.A||0)}</td><td>${num(sel.B||0)}</td><td class="refcol">${num((sel.A||0)+(sel.B||0))}</td><td>${num(sel.C||0)}</td><td>${num(ou)}</td>`+
+    `<td>${num(v.contacts)}</td>`;
+}
+function sumOv(list){const ks=["newApplications","reApplications","targetNew","forecast","contacts"];const r={};ks.forEach(k=>r[k]=list.reduce((a,o)=>a+(o.overview[k]||0),0));return r;}
+function sumSel(list){const r={A:0,B:0,C:0,other:0,unknown:0};list.forEach(o=>["A","B","C","other","unknown"].forEach(k=>r[k]+=(o.selection[k]||0)));return r;}
+
 function renderList(){
   renderKpis(); renderChart();
-  const selT=o=>["A","B","C","other","unknown"].reduce((a,k)=>a+(o.selection[k]||0),0);
-  const rows=DATA.offices.map((o,i)=>{
-    const v=o.overview, rate=v.targetNew?Math.min(999,Math.round(v.forecast/v.targetNew*100)):0;
-    return `<tr class="click" data-i="${i}">
-      <td class="l office">${o.office}</td>
-      <td>${num(v.newApplications)}</td>
-      <td>${num(v.reApplications)}</td>
-      <td>${num(v.targetNew)}</td>
-      <td>${meter(rate)}</td>
-      <td><span class="pill ${v.forecast>=v.targetNew?'up':'down'}">${num(v.forecast)}</span></td>
-      <td>${num(o.selection.A||0)}</td>
-      <td>${num(o.selection.B||0)}</td>
-      <td class="refcol">${num((o.selection.A||0)+(o.selection.B||0))}</td>
-      <td>${num(o.selection.C||0)}</td>
-      <td>${num((o.selection.other||0)+(o.selection.unknown||0))}</td>
-      <td>${num(v.contacts)}</td>
-    </tr>`;
-  }).join("");
-  const o=DATA.offices, selTotal=o.reduce((a,x)=>a+selT(x),0);
+  const offices=DATA.offices;
+  // エリアでグループ化（割当順は AREA_ORDER、未定義は末尾）
+  const groups={}; offices.forEach((o,i)=>{const a=o.area||"その他";(groups[a]=groups[a]||[]).push(i);});
+  const areas=Object.keys(groups).sort((a,b)=>{const ia=AREA_ORDER.indexOf(a),ib=AREA_ORDER.indexOf(b);return (ia<0?99:ia)-(ib<0?99:ib);});
+  const multiArea=areas.length>1;
+  let body="";
+  areas.forEach(area=>{
+    const list=groups[area].map(i=>offices[i]);
+    groups[area].forEach(i=>{const o=offices[i];body+=`<tr class="click" data-i="${i}"><td class="l office">${o.office}</td>${officeCells(o.overview,o.selection)}</tr>`;});
+    if(multiArea) body+=`<tr class="subtotal"><td class="l">小計：${area}</td>${officeCells(sumOv(list),sumSel(list))}</tr>`;
+  });
   $("#listTable").innerHTML=`<table>
     <thead><tr><th class="l">オフィス</th><th>新規応募</th><th>再応募</th><th>目標(新規)</th><th>達成率</th><th>着地見込み</th><th>A人選</th><th>B人選</th><th class="ref">A+B人選</th><th>C人選</th><th>その他+不明</th><th>接触数</th></tr></thead>
-    <tbody>${rows}</tbody>
-    <tfoot><tr><td class="l">合計</td><td>${num(sum(o,"overview.newApplications"))}</td><td>${num(sum(o,"overview.reApplications"))}</td><td>${num(sum(o,"overview.targetNew"))}</td><td></td><td>${num(sum(o,"overview.forecast"))}</td><td>${num(sum(o,"selection.A"))}</td><td>${num(sum(o,"selection.B"))}</td><td>${num(sum(o,"selection.A")+sum(o,"selection.B"))}</td><td>${num(sum(o,"selection.C"))}</td><td>${num(sum(o,"selection.other")+sum(o,"selection.unknown"))}</td><td>${num(sum(o,"overview.contacts"))}</td></tr></tfoot>
+    <tbody>${body}</tbody>
+    <tfoot><tr><td class="l">合計</td>${officeCells(sumOv(offices),sumSel(offices))}</tr></tfoot>
   </table>`;
-  document.querySelectorAll("tr.click").forEach(tr=>tr.addEventListener("click",()=>showDetail(+tr.dataset.i)));
+  document.querySelectorAll("#listTable tr.click").forEach(tr=>tr.addEventListener("click",()=>showDetail(+tr.dataset.i)));
 }
 
 /* ---- 詳細: 1オフィス分（参考値つき） ---- */
