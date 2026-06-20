@@ -397,9 +397,9 @@ function renderList(){
   renderKpis(); renderChart();
   const selT=o=>["A","B","C","other","unknown"].reduce((a,k)=>a+(o.selection[k]||0),0);
   const rows=DATA.offices.map((o,i)=>{
-    const v=o.overview, rate=v.targetNew?Math.min(999,Math.round(v.newApplications/v.targetNew*100)):0;
+    const v=o.overview, rate=v.targetNew?Math.min(999,Math.round(v.forecast/v.targetNew*100)):0;
     return `<tr class="click" data-i="${i}">
-      <td class="l office">${o.office} <span class="pref">${(o.prefectures||[]).join("・")}</span></td>
+      <td class="l office">${o.office}</td>
       <td>${num(v.newApplications)}</td>
       <td>${num(v.reApplications)}</td>
       <td>${num(v.targetNew)}</td>
@@ -421,17 +421,17 @@ function renderList(){
 /* ---- 詳細: 1オフィス分（参考値つき） ---- */
 function showDetail(i){
   const o=DATA.offices[i], v=o.overview;
-  const rate=v.targetNew?Math.round(v.newApplications/v.targetNew*100):0;
+  const rate=v.targetNew?Math.round(v.forecast/v.targetNew*100):0;
   const statRef=(l,val,sub,ref)=>`<div class="stat"><div class="s-l">${l}</div><div class="s-v">${num(val)}</div>${sub?`<div class="s-l">${sub}</div>`:""}${ref!=null?`<div class="s-ref">うちA+B人選 ${num(ref)}</div>`:""}</div>`;
   const stat=(l,val,sub="")=>`<div class="stat"><div class="s-l">${l}</div><div class="s-v">${num(val)}</div>${sub?`<div class="s-l">${sub}</div>`:""}</div>`;
   // ① サマリー（新規・再応募に「うちA+B人選」参考値）
   const summary=`<div class="panel"><div class="panel-head"><h2>① 応募サマリー</h2><span class="hint">${DATA.month}</span></div>
     <div class="stat-grid">
-      ${statRef("新規応募",v.newApplications,`目標 ${num(v.targetNew)}・達成 ${rate}%`,v.newAB)}
+      ${statRef("新規応募",v.newApplications,`目標 ${num(v.targetNew)}`,v.newAB)}
       ${stat("うち電話応募",v.phoneApplications,"内訳（MCGのみ）")}
       ${statRef("再応募",v.reApplications,"",v.reAB)}
       ${stat("目標(新規)",v.targetNew)}
-      <div class="stat"><div class="s-l">達成率（新規/目標）</div><div style="margin-top:8px">${meter(rate)}</div></div>
+      <div class="stat"><div class="s-l">達成率（着地見込み/目標）</div><div style="margin-top:8px">${meter(rate)}</div></div>
       <div class="stat"><div class="s-l">着地見込み</div><div class="s-v">${num(v.forecast)}</div><div class="s-l">${pill(v.forecast-v.targetNew)} 対目標</div></div>
       ${stat("接触数",v.contacts)}
     </div></div>`;
@@ -456,7 +456,7 @@ function showDetail(i){
   $("#detailView").innerHTML=`
     <button class="back" id="backBtn">← オフィス一覧に戻る</button>
     <div class="detail-head">
-      <h2>${o.office}</h2><span class="pref">${(o.prefectures||[]).join("・")}</span>
+      <h2>${o.office}</h2>
       <span style="margin-left:auto;display:flex;gap:6px"><button id="prevO">‹ 前</button><button id="nextO">次 ›</button></span>
     </div>
     ${summary}${selection}${funnel}`;
