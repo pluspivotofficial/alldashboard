@@ -101,6 +101,12 @@
   th.ref,td.refcol{color:var(--coral)}
   .hidden{display:none}
 
+  /* chart interactivity */
+  .chart-wrap{position:relative}
+  .totline.dash{stroke-dasharray:3 4;opacity:.85}
+  .tip{position:absolute;pointer-events:none;background:#1f2640;color:#fff;font-size:11px;line-height:1.5;padding:6px 9px;border-radius:7px;white-space:nowrap;transform:translate(-50%,-104%);opacity:0;transition:opacity .07s;z-index:6;box-shadow:0 3px 10px rgba(0,0,0,.22)}
+  .tip b{font-variant-numeric:tabular-nums}
+
   /* sidebar layout */
   .app{display:flex;align-items:stretch;min-height:100vh}
   .sidebar{flex:0 0 196px;background:var(--navy);color:#fff;padding:16px 12px;position:sticky;top:0;height:100vh}
@@ -147,12 +153,14 @@
     <div class="kpis" id="kpis"></div>
 
     <div class="panel">
-      <div class="panel-head"><h2>日次の応募推移（全体）</h2><span class="hint">積み上げ＝総応募（新規＋再応募）／線＝総応募</span></div>
-      <div class="chart-legend">
-        <span><span class="sw" style="background:var(--coral)"></span>新規応募</span>
-        <span><span class="sw" style="background:var(--reblue)"></span>再応募</span>
-        <span><span class="sw" style="background:var(--navy)"></span>総応募</span>
+      <div class="panel-head">
+        <h2>日次の応募推移（全体）</h2>
+        <select id="officeChartMode">
+          <option value="total">総応募（新規＋再応募）</option>
+          <option value="ab">A+B人選のみ</option>
+        </select>
       </div>
+      <div class="chart-legend" id="officeLegend"></div>
       <div class="chart-wrap" id="chart"></div>
     </div>
 
@@ -257,36 +265,115 @@ function renderKpis(){
   ].join("");
 }
 
-/* ---- 日次グラフ（インラインSVG・積み上げ棒＋総応募ライン） ---- */
+/* ---- 日次グラフ群（全日付・ホバー・着地予測点線・A+B切替・媒体内訳） ---- */
+const CHART={W:720,H:212,padL:34,padR:12,padT:12,padB:34};
+const MEDIA_COLORS=['#1A2855','#E85A4F','#6b86c9','#E8A93F','#1f9d6b','#9d6bc9','#c97c6b','#7a809c','#3fa7e8','#b0418a'];
+
+function monthAxis(month){
+  const [y,m]=(month||"").split("-").map(Number);
+  const dim=(y&&m)?new Date(y,m,0).getDate():30;
+  const now=new Date(), cur=now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0");
+  const elapsed=(cur===month)?Math.min(now.getDate(),dim):dim;
+  const days=[]; for(let d=1;d<=dim;d++) days.push({day:d,date:`${month}-${String(d).padStart(2,"0")}`});
+  return {days,dim,elapsed};
+}
+function gridLines(maxV,y){
+  const W=CHART.W,padL=CHART.padL,padR=CHART.padR,g=[];
+  for(let t=0;t<=4;t++){const v=Math.round(maxV*t/4),yy=y(v);
+    g.push(`<line class="gridln" x1="${padL}" y1="${yy}" x2="${W-padR}" y2="${yy}"/><text class="axis" x="${padL-6}" y="${yy+3}" text-anchor="end">${v}</text>`);}
+  return g.join("");
+}
+function attachTip(elId,cx,y,W,H,padL,plotW,n,days,fmt){
+  const svg=$("#"+elId+"-svg"),tip=$("#"+elId+"-tip");
+  svg.addEventListener("mousemove",ev=>{
+    const r=svg.getBoundingClientRect(); const sx=(ev.clientX-r.left)/r.width*W;
+    let i=Math.round((sx-padL)/plotW*n-0.5); i=Math.max(0,Math.min(n-1,i));
+    tip.innerHTML=fmt(i); tip.style.left=(svg.offsetLeft+cx(i)/W*r.width)+"px";
+    tip.style.top=(svg.offsetTop+CHART.padT/H*r.height)+"px"; tip.style.opacity=1;
+  });
+  svg.addEventListener("mouseleave",()=>tip.style.opacity=0);
+}
+
+/* mode: 'total'(新規+再応募+総応募ライン) / 'ab'(A+B人選) / 'both'(総応募ライン+A+B人選ライン) */
+function renderDailyChart(elId,daily,mode,month){
+  const el=$("#"+elId); if(!el) return;
+  const {days,dim,elapsed}=monthAxis(month);
+  const by={}; (daily||[]).forEach(d=>by[d.date]=d);
+  const get=date=>by[date]||{new:0,re:0,total:0,ab:0};
+  let aLen=0; days.forEach((d,i)=>{ if(by[d.date]) aLen=i+1; }); if(!aLen) aLen=Math.min(elapsed,days.length); // 実データのある最終日まで（残りは予測）
+  const {W,H,padL,padR,padT,padB}=CHART, n=days.length, plotW=W-padL-padR, plotH=H-padT-padB;
+  const barSpec = mode==="ab" ? [{key:"ab",color:"var(--gold)"}] : [{key:"new",color:"var(--coral)"},{key:"re",color:"var(--reblue)"}];
+  const lineSpec = mode==="ab" ? [{key:"ab",color:"var(--gold)",fc:true}]
+                 : mode==="both" ? [{key:"total",color:"var(--navy)",fc:true},{key:"ab",color:"var(--gold)",fc:false}]
+                 : [{key:"total",color:"var(--navy)",fc:true}];
+  let maxV=1;
+  days.forEach(d=>{const r=get(d.date); maxV=Math.max(maxV,barSpec.reduce((a,s)=>a+(r[s.key]||0),0));});
+  lineSpec.forEach(s=>days.forEach(d=>maxV=Math.max(maxV,get(d.date)[s.key]||0)));
+  const fcSpec=lineSpec.find(s=>s.fc);
+  let avg=0;
+  if(fcSpec){const arr=days.slice(0,aLen).map(d=>get(d.date)[fcSpec.key]||0); avg=arr.length?arr.reduce((a,b)=>a+b,0)/arr.length:0; maxV=Math.max(maxV,avg);}
+  const bw=Math.max(2,Math.min(20,plotW/n*0.7));
+  const cx=i=>padL+plotW*(i+0.5)/n, y=v=>padT+plotH*(1-v/maxV);
+  let bars="";
+  days.forEach((d,i)=>{ if(i>=aLen) return; const r=get(d.date); let acc=0,x=cx(i)-bw/2;
+    barSpec.forEach(s=>{const v=r[s.key]||0; if(!v) return; const yTop=y(acc+v),h=y(acc)-y(acc+v); bars+=`<rect x="${x}" y="${yTop}" width="${bw}" height="${Math.max(0,h)}" fill="${s.color}"/>`; acc+=v;});
+  });
+  let lines="";
+  lineSpec.forEach(s=>{ const vals=days.map(d=>get(d.date)[s.key]||0);
+    const ptsAct=vals.slice(0,aLen).map((v,i)=>`${cx(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+    lines+=`<polyline class="totline" points="${ptsAct}" stroke="${s.color}"/>`;
+    if(s.fc && aLen<n && aLen>0){
+      const rest=[`${cx(aLen-1).toFixed(1)},${y(vals[aLen-1]).toFixed(1)}`];
+      for(let i=aLen;i<n;i++) rest.push(`${cx(i).toFixed(1)},${y(avg).toFixed(1)}`);
+      lines+=`<polyline class="totline dash" points="${rest.join(" ")}" stroke="${s.color}"/>`;
+    }
+  });
+  const fv=days.map(d=>get(d.date)[lineSpec[0].key]||0);
+  const dots=fv.slice(0,aLen).map((v,i)=>`<circle class="totdot" cx="${cx(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="2"/>`).join("");
+  const xlab=days.map((d,i)=>`<text class="axis" x="${cx(i).toFixed(1)}" y="${H-8}" text-anchor="middle" font-size="8">${d.day}</text>`).join("");
+  el.innerHTML=`<div class="tip" id="${elId}-tip"></div>
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" id="${elId}-svg">${gridLines(maxV,y)}${bars}${lines}${dots}${xlab}</svg>`;
+  attachTip(elId,cx,y,W,H,padL,plotW,n,days,i=>{
+    const r=get(days[i].date),proj=i>=aLen,md=days[i].date.slice(5);
+    let h=mode==="ab"?`${md}　A+B人選 <b>${r.ab}</b>`:`${md}　新規 <b>${r.new}</b>・再 <b>${r.re}</b>・計 <b>${r.total}</b>`+(mode==="both"?`・A+B <b>${r.ab}</b>`:"");
+    if(proj) h+=`<br><span style="opacity:.75">予測ペース ${Math.round(avg)}/日</span>`;
+    return h;
+  });
+}
+
+/* 媒体内訳の積み上げ（新規応募・日別） */
+function renderMediaStackChart(elId,mediaList,month){
+  const el=$("#"+elId); if(!el) return;
+  const {days,dim,elapsed}=monthAxis(month);
+  const series=(mediaList||[]).map((m,idx)=>{const by={};(m.daily||[]).forEach(d=>by[d.date]=d.new||0);return {media:m.media,color:MEDIA_COLORS[idx%MEDIA_COLORS.length],by};});
+  const {W,H,padL,padR,padT,padB}=CHART, n=days.length, plotW=W-padL-padR, plotH=H-padT-padB;
+  const dayTot=days.map(d=>series.reduce((a,s)=>a+(s.by[d.date]||0),0));
+  const maxV=Math.max(1,...dayTot);
+  const bw=Math.max(2,Math.min(20,plotW/n*0.7));
+  const cx=i=>padL+plotW*(i+0.5)/n, y=v=>padT+plotH*(1-v/maxV);
+  let bars="";
+  days.forEach((d,i)=>{ if(i>=elapsed) return; let acc=0,x=cx(i)-bw/2;
+    series.forEach(s=>{const v=s.by[d.date]||0; if(!v) return; const yTop=y(acc+v),h=y(acc)-y(acc+v); bars+=`<rect x="${x}" y="${yTop}" width="${bw}" height="${Math.max(0,h)}" fill="${s.color}"/>`; acc+=v;});
+  });
+  const xlab=days.map((d,i)=>`<text class="axis" x="${cx(i).toFixed(1)}" y="${H-8}" text-anchor="middle" font-size="8">${d.day}</text>`).join("");
+  const legend=series.map(s=>`<span><span class="sw" style="background:${s.color}"></span>${s.media}</span>`).join("");
+  el.innerHTML=`<div class="chart-legend">${legend}</div>
+    <div class="chart-wrap" style="position:relative;padding:6px 0 0"><div class="tip" id="${elId}-tip"></div>
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" id="${elId}-svg">${gridLines(maxV,y)}${bars}${xlab}</svg></div>`;
+  attachTip(elId,cx,y,W,H,padL,plotW,n,days,i=>{
+    const md=days[i].date.slice(5);
+    const ls=series.map(s=>{const v=s.by[days[i].date]||0;return v?`<span style="color:${s.color}">●</span>${s.media} ${v}`:null;}).filter(Boolean);
+    return `${md}　新規計 <b>${dayTot[i]}</b><br>`+(ls.join("<br>")||"—");
+  });
+}
+
+/* オフィス全体グラフ（モード選択つき） */
 function renderChart(){
-  const daily=DATA.daily||[];
-  const W=720,H=200,padL=34,padR=12,padT=12,padB=26;
-  const n=daily.length||1;
-  const maxV=Math.max(1,...daily.map(d=>Math.max(d.total,(d.new||0)+(d.re||0))));
-  const plotW=W-padL-padR, plotH=H-padT-padB, base=padT+plotH;
-  const bw=Math.max(3, Math.min(22, plotW/n*0.62));
-  const cx=i=> padL + plotW*(i+0.5)/n;
-  const y=v=> padT + plotH*(1 - v/maxV);
-  // y目盛り
-  const ticks=4, grid=[];
-  for(let t=0;t<=ticks;t++){ const v=Math.round(maxV*t/ticks); const yy=y(v);
-    grid.push(`<line class="gridln" x1="${padL}" y1="${yy}" x2="${W-padR}" y2="${yy}"/><text class="axis" x="${padL-6}" y="${yy+3}" text-anchor="end">${v}</text>`); }
-  // 棒
-  const bars=daily.map((d,i)=>{
-    const x=cx(i)-bw/2;
-    const hNew=base-y(d.new), hRe=y(d.new)-y(d.new+d.re);
-    return `<rect x="${x}" y="${y(d.new)}" width="${bw}" height="${Math.max(0,hNew)}" fill="var(--coral)"/>`+
-           `<rect x="${x}" y="${y(d.new+d.re)}" width="${bw}" height="${Math.max(0,hRe)}" fill="var(--reblue)"/>`;
-  }).join("");
-  // 総応募ライン
-  const pts=daily.map((d,i)=>`${cx(i).toFixed(1)},${y(d.total).toFixed(1)}`).join(" ");
-  const dots=daily.map((d,i)=>`<circle class="totdot" cx="${cx(i).toFixed(1)}" cy="${y(d.total).toFixed(1)}" r="2"/>`).join("");
-  // x目盛り（約6個）
-  const step=Math.max(1,Math.ceil(n/6));
-  const xlab=daily.map((d,i)=> i%step===0 ? `<text class="axis" x="${cx(i)}" y="${H-8}" text-anchor="middle">${d.date.slice(5)}</text>`:"").join("");
-  $("#chart").innerHTML=`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="日次応募推移">
-    ${grid.join("")}${bars}<polyline class="totline" points="${pts}"/>${dots}${xlab}
-  </svg>`;
+  const sel=$("#officeChartMode"), mode=sel?sel.value:"total";
+  $("#officeLegend").innerHTML = mode==="ab"
+    ? `<span><span class="sw" style="background:var(--gold)"></span>A+B人選（新規）</span><span><span class="sw" style="background:var(--gold)"></span>着地予測（点線）</span>`
+    : `<span><span class="sw" style="background:var(--coral)"></span>新規応募</span><span><span class="sw" style="background:var(--reblue)"></span>再応募</span><span><span class="sw" style="background:var(--navy)"></span>総応募</span><span><span class="sw" style="background:var(--gold)"></span>着地予測（点線）</span>`;
+  renderDailyChart("chart",DATA.daily,mode,DATA.month);
 }
 
 /* ---- 一覧テーブル（人選数つき・クリックで詳細） ---- */
@@ -402,6 +489,10 @@ function renderMediaList(){
   $("#mediaListView").innerHTML=`
     <div class="kpis">${kpis}</div>
     <div class="panel">
+      <div class="panel-head"><h2>日別の媒体内訳（新規応募）</h2><span class="hint">マウスオーバーで媒体別件数</span></div>
+      <div class="chart-wrap" id="mediaStack" style="padding:0 10px 8px"></div>
+    </div>
+    <div class="panel">
       <div class="panel-head"><h2>媒体一覧</h2><span class="hint">行をクリックでオフィス別の内訳へ</span></div>
       <div class="scroll"><table>
         <thead><tr><th class="l">媒体</th><th>新規応募</th><th>再応募</th><th>電話応募</th><th>接触数</th><th>人選数</th><th class="ref">A+B人選</th></tr></thead>
@@ -409,6 +500,7 @@ function renderMediaList(){
         <tfoot><tr><td class="l">合計</td><td>${num(sum(media,"overview.newApplications"))}</td><td>${num(sum(media,"overview.reApplications"))}</td><td>${num(sum(media,"overview.phoneApplications"))}</td><td>${num(sum(media,"overview.contacts"))}</td><td>${num(selTotal)}</td><td>${num(sum(media,"overview.newAB")+sum(media,"overview.reAB"))}</td></tr></tfoot>
       </table></div>
     </div>`;
+  renderMediaStackChart("mediaStack", media, DATA.month);
   document.querySelectorAll("#mediaListView tr.click").forEach(tr=>tr.addEventListener("click",()=>showMediaDetail(+tr.dataset.i)));
 }
 
@@ -438,7 +530,15 @@ function showMediaDetail(i){
       <td>${num(["A","B","C","other","unknown"].reduce((a,k)=>a+(o.selection[k]||0),0))}</td>
       <td class="refcol">${num(ov.newAB+ov.reAB)}</td>
     </tr>`;}).join("");
-  const officeTable=`<div class="panel"><div class="panel-head"><h2>③ オフィス別パフォーマンス</h2><span class="hint">${m.media}</span></div>
+  const chartPanel=`<div class="panel"><div class="panel-head"><h2>③ 日次推移</h2><span class="hint">点線＝月末までの着地予測</span></div>
+    <div class="chart-legend">
+      <span><span class="sw" style="background:var(--coral)"></span>新規</span>
+      <span><span class="sw" style="background:var(--reblue)"></span>再応募</span>
+      <span><span class="sw" style="background:var(--navy)"></span>総応募</span>
+      <span><span class="sw" style="background:var(--gold)"></span>A+B人選</span>
+    </div>
+    <div class="chart-wrap" id="mediaDetailChart"></div></div>`;
+  const officeTable=`<div class="panel"><div class="panel-head"><h2>④ オフィス別パフォーマンス</h2><span class="hint">${m.media}</span></div>
     <div class="scroll"><table>
       <thead><tr><th class="l">オフィス</th><th>新規応募</th><th>再応募</th><th>電話応募</th><th>接触数</th><th>人選数</th><th class="ref">A+B人選</th></tr></thead>
       <tbody>${orows||`<tr><td class="l" colspan="7">データなし</td></tr>`}</tbody>
@@ -448,9 +548,10 @@ function showMediaDetail(i){
     <div class="detail-head"><h2>${m.media}</h2>
       <span style="margin-left:auto;display:flex;gap:6px"><button id="mPrev">‹ 前</button><button id="mNext">次 ›</button></span>
     </div>
-    ${summary}${selection}${officeTable}`;
+    ${summary}${selection}${chartPanel}${officeTable}`;
   $("#mediaListView").classList.add("hidden");
   $("#mediaDetailView").classList.remove("hidden");
+  renderDailyChart("mediaDetailChart", m.daily, "both", DATA.month);
   $("#mBack").addEventListener("click",showMediaList);
   $("#mPrev").addEventListener("click",()=>showMediaDetail((i-1+DATA.media.length)%DATA.media.length));
   $("#mNext").addEventListener("click",()=>showMediaDetail((i+1)%DATA.media.length));
@@ -491,6 +592,7 @@ async function refresh(){
 }
 $("#refreshBtn").addEventListener("click",refresh);
 $("#monthSel").addEventListener("change",refresh);
+$("#officeChartMode").addEventListener("change",renderChart);
 $("#navOffice").addEventListener("click",()=>switchSection("office"));
 $("#navMedia").addEventListener("click",()=>switchSection("media"));
 selectCurrentMonth();

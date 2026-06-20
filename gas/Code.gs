@@ -183,6 +183,11 @@ function runDailyAggregation(monthArg) {
   const firstDateByPhone = {};   // 電話 → 初回応募日（累積シートでの重複判定）
   const judgeByPhone = {};       // 電話 → 'A'|'B'|'C'|'other'（⑤を4条件で判定）
   const dailyMap = {};
+  const mediaDailyMap = {};       // media -> date -> {new, re, ab}
+  const md_ = (media, date) => {
+    const m = mediaDailyMap[media] || (mediaDailyMap[media] = {});
+    return m[date] || (m[date] = { new: 0, re: 0, ab: 0 });
+  };
   const reDailySeen = {};        // 日次の再応募を電話ユニークにするための既出管理
   const rePhoneInMonth = {};     // 当月に再応募した電話（歩留の再応募コホート判定用）
   const range = monthRange_(month);
@@ -230,13 +235,14 @@ function runDailyAggregation(monthArg) {
   parsed.forEach(x => {
     if (!x.office || !acc[x.office] || !inRange_(x.d, range.monthStart, range.monthEnd)) return;
     const key = fmtDate_(x.d);
-    dailyMap[key] = dailyMap[key] || { new: 0, re: 0 };
+    dailyMap[key] = dailyMap[key] || { new: 0, re: 0, ab: 0 };
     const mo = macc_(x.media, x.office);
     if (x.first) {                                    // 初回=新規（電話ユニーク）
       acc[x.office].overview.newApplications += 1;
       mo.overview.newApplications += 1;
-      if (isAB(x.phone)) { acc[x.office].overview.newAB += 1; mo.overview.newAB += 1; }
       dailyMap[key].new += 1;
+      md_(x.media, key).new += 1;
+      if (isAB(x.phone)) { acc[x.office].overview.newAB += 1; mo.overview.newAB += 1; dailyMap[key].ab += 1; md_(x.media, key).ab += 1; }
     } else {                                          // 2回目以降=再応募（電話ユニーク）
       const set = reUniqByOffice[x.office] || (reUniqByOffice[x.office] = new Set());
       const firstReInOffice = !set.has(x.phone);      // このオフィスでこの電話の初回再応募か
@@ -246,7 +252,7 @@ function runDailyAggregation(monthArg) {
         (mm[x.office] || (mm[x.office] = new Set())).add(x.phone);
       }
       rePhoneInMonth[x.phone] = true;                 // 当月の再応募者
-      if (!reDailySeen[x.phone]) { reDailySeen[x.phone] = true; dailyMap[key].re += 1; } // 日次もユニーク
+      if (!reDailySeen[x.phone]) { reDailySeen[x.phone] = true; dailyMap[key].re += 1; md_(x.media, key).re += 1; } // 日次もユニーク
     }
   });
   Object.keys(reUniqByOffice).forEach(o => {
@@ -334,6 +340,10 @@ function runDailyAggregation(monthArg) {
       Object.values(mediaMap[media][office].funnel).forEach(f => { f.ab = f._abPhones.size; delete f._abPhones; });
     });
   });
+  const mediaDailyOut = media => {
+    const dm = mediaDailyMap[media] || {};
+    return Object.keys(dm).sort().map(k => ({ date: k, new: dm[k].new, re: dm[k].re, total: dm[k].new + dm[k].re, ab: dm[k].ab }));
+  };
   const mediaOut = Object.keys(mediaMap).map(media => {
     const offices = Object.keys(mediaMap[media]).map(office => ({
       office: office,
@@ -342,11 +352,11 @@ function runDailyAggregation(monthArg) {
       funnel: mediaMap[media][office].funnel,
     })).filter(mediaOfficeHasData_).sort((a, b) => b.overview.newApplications - a.overview.newApplications);
     const tot = sumMediaOffices_(offices);
-    return { media: media, overview: tot.overview, selection: tot.selection, funnel: tot.funnel, offices: offices };
+    return { media: media, overview: tot.overview, selection: tot.selection, funnel: tot.funnel, offices: offices, daily: mediaDailyOut(media) };
   }).filter(m => m.offices.length > 0).sort((a, b) => b.overview.newApplications - a.overview.newApplications);
 
   const daily = Object.keys(dailyMap).sort().map(k => ({
-    date: k, new: dailyMap[k].new, re: dailyMap[k].re, total: dailyMap[k].new + dailyMap[k].re,
+    date: k, new: dailyMap[k].new, re: dailyMap[k].re, total: dailyMap[k].new + dailyMap[k].re, ab: dailyMap[k].ab,
   }));
 
   const summary = {
