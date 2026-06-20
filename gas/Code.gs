@@ -395,17 +395,19 @@ function bumpSelection_(sel, letter) {
   else sel.unknown += 1;
 }
 
-/* 応募媒体の表記ゆれを統合。
- *   「キューメイト」を含む（Indeed（キューメイト）/スタンバイ（キューメイト）/求人ボックス（キューメイト）等）→ キューメイト
- *   直接の indeed/Indeed → Indeed
- *   「自社」を含む（自社/自社（会員登録）/自社（電話）/自社（求人応募）等）→ 自社
- *   それ以外は原文のまま（空は不明）。 */
+/* 応募媒体の表記ゆれ・グルーピングを統合。
+ *   友人紹介 ← 友人紹介（オーガニック）/ BS
+ *   自社     ← 自社/自社（会員登録）/自社（電話）/自社（求人応募）等
+ *   その他媒体 ← その他媒体 / タウンワーク
+ *   キューメイト ← キューメイト系 / Indeed / 求人ボックス / バイトル(Pro) / 不明 / 空欄
+ *   それ以外（マイナビ・e介護転職・エン派遣 等）は原文のまま。 */
 function normMedia_(m) {
   const s = (m || '').toString().trim();
-  if (!s) return '不明';
-  if (s.indexOf('キューメイト') >= 0) return 'キューメイト';
-  if (/indeed/i.test(s)) return 'Indeed';
+  if (s.indexOf('友人紹介') >= 0 || s === 'BS') return '友人紹介';
   if (s.indexOf('自社') >= 0) return '自社';
+  if (s.indexOf('その他媒体') >= 0 || s.indexOf('タウンワーク') >= 0) return 'その他媒体';
+  if (!s || s.indexOf('キューメイト') >= 0 || /indeed/i.test(s) ||
+      s.indexOf('求人ボックス') >= 0 || s.indexOf('バイトル') >= 0 || s.indexOf('不明') >= 0) return 'キューメイト';
   return s;
 }
 
