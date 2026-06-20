@@ -58,6 +58,8 @@
   tfoot td{background:#f4f5fb;font-weight:700;color:var(--navy);border-top:2px solid var(--line)}
   tr.subtotal td{background:#eef1fa;font-weight:700;color:var(--navy-soft);border-top:1px solid var(--line)}
   tr.subtotal td.l{color:var(--navy)}
+  .catbtn{font-size:12px;font-weight:600;padding:6px 12px;border-radius:999px;border:1px solid var(--line);background:#fff;color:var(--muted);cursor:pointer}
+  .catbtn.on{background:var(--navy);color:#fff;border-color:var(--navy)}
 
   tr.click{cursor:pointer}
   tr.click:hover{background:#f0f3ff}
@@ -142,6 +144,7 @@
     <div class="brand">📊 応募ダッシュボード</div>
     <button class="nav-item active" id="navOffice" data-sec="office">🏢 オフィス別</button>
     <button class="nav-item" id="navMedia" data-sec="media">📣 媒体別</button>
+    <button class="nav-item" id="navSel" data-sec="selection">👥 人選別</button>
   </aside>
   <div class="main"><div class="wrap">
   <header class="top">
@@ -190,6 +193,12 @@
   <div id="mediaSection" class="hidden">
     <div id="mediaListView"></div>
     <div id="mediaDetailView" class="hidden"></div>
+  </div>
+
+  <!-- ===== 人選別セクション ===== -->
+  <div id="selectionSection" class="hidden">
+    <div id="selListView"></div>
+    <div id="selDetailView" class="hidden"></div>
   </div>
 
   <p class="updated" id="updated"></p>
@@ -588,25 +597,117 @@ function showMediaDetail(i){
 }
 function showMediaList(){ $("#mediaDetailView").classList.add("hidden"); $("#mediaListView").classList.remove("hidden"); }
 
-/* ===== セクション切替（サイドバー） ===== */
-function switchSection(sec){
-  const isMedia = sec==="media";
-  $("#officeSection").classList.toggle("hidden", isMedia);
-  $("#mediaSection").classList.toggle("hidden", !isMedia);
-  $("#navOffice").classList.toggle("active", !isMedia);
-  $("#navMedia").classList.toggle("active", isMedia);
-  $("#secTitle").textContent = isMedia ? "媒体別パフォーマンス" : "応募ダッシュボード";
-  $("#secSub").textContent = isMedia
-    ? "応募媒体ごと｜オフィス別の内訳まで（Indeed・キューメイトは統合）"
-    : "オフィス別｜総応募・MCG・人選を突合した集計ビュー";
-  if(isMedia){ renderMediaList(); showMediaList(); } else { showList(); }
+/* ===== 人選別ビュー ===== */
+const SEL_GRADES=[["A","A人選"],["B","B人選"],["C","C人選"],["ou","その他+不明"]];
+const C_CATS=[["exp","経験"],["qual","資格"],["wd","勤務日数"],["ageOk","年齢"]];
+const cFocusByArea={}; // area -> [cat,cat]（C人選の注力2カテゴリ）
+
+function bsZero(){ return {A:{new:0,re:0,started:0},B:{new:0,re:0,started:0},C:{new:0,re:0,started:0},ou:{new:0,re:0,started:0}}; }
+function bsSum(list){ const r=bsZero(); list.forEach(o=>{const b=o.bySelection||{}; ["A","B","C","ou"].forEach(g=>{const s=b[g]||{new:0,re:0,started:0}; r[g].new+=s.new; r[g].re+=s.re; r[g].started+=s.started;});}); return r; }
+function selCells(b){ return ["A","B","C","ou"].map(g=>{const s=b[g]||{new:0,re:0,started:0}; return `<td>${num(s.new)}</td><td>${num(s.re)}</td>`;}).join(""); }
+
+function renderSelList(){
+  const offices=DATA.offices;
+  const groups={}; offices.forEach((o,i)=>{const a=o.area||"その他";(groups[a]=groups[a]||[]).push(i);});
+  const areas=Object.keys(groups).sort((a,b)=>{const ia=AREA_ORDER.indexOf(a),ib=AREA_ORDER.indexOf(b);return (ia<0?99:ia)-(ib<0?99:ib);});
+  const multi=areas.length>1;
+  let body="";
+  areas.forEach(area=>{
+    const idxs=groups[area];
+    idxs.forEach(i=>{const o=offices[i];body+=`<tr class="click" data-i="${i}"><td class="l office">${o.office}</td>${selCells(o.bySelection||{})}</tr>`;});
+    if(multi) body+=`<tr class="subtotal"><td class="l">小計：${area}</td>${selCells(bsSum(idxs.map(i=>offices[i])))}</tr>`;
+  });
+  $("#selListView").innerHTML=`<div class="panel">
+    <div class="panel-head"><h2>人選別（新規／再応募）</h2><span class="hint">行クリックで稼働率・応募者明細へ</span></div>
+    <div class="scroll"><table>
+      <thead>
+        <tr><th class="l" rowspan="2">オフィス</th><th colspan="2">A人選</th><th colspan="2">B人選</th><th colspan="2">C人選</th><th colspan="2">その他+不明</th></tr>
+        <tr><th>新規</th><th>再</th><th>新規</th><th>再</th><th>新規</th><th>再</th><th>新規</th><th>再</th></tr>
+      </thead>
+      <tbody>${body||`<tr><td class="l" colspan="9">データなし</td></tr>`}</tbody>
+      <tfoot><tr><td class="l">合計</td>${selCells(bsSum(offices))}</tr></tfoot>
+    </table></div></div>`;
+  document.querySelectorAll("#selListView tr.click").forEach(tr=>tr.addEventListener("click",()=>showSelDetail(+tr.dataset.i)));
 }
 
+function appTable(list){
+  return `<div class="scroll"><table>
+    <thead><tr><th class="l">氏名</th><th>電話</th><th>年齢</th><th>都道府県</th><th>媒体</th><th>区分</th><th class="l">接触</th><th>稼働(開始)</th><th>資格</th><th>経験</th><th>勤務</th><th>年齢条件</th></tr></thead>
+    <tbody>${list.map(a=>`<tr>
+      <td class="l office">${a.name||""}</td><td>${a.phone||""}</td><td>${a.age!=null&&a.age!==""?num(a.age):""}</td><td class="pref">${a.pref||""}</td><td>${a.media||""}</td>
+      <td>${a.newRe==="re"?"再応募":"新規"}</td><td class="l pref">${a.contact||""}</td>
+      <td>${a.started?("○"+(a.startDate?" "+a.startDate.slice(5):"")):"–"}</td>
+      <td>${a.qual?"有":"–"}</td><td>${a.exp?"有":"–"}</td><td>${a.wd?"LT":"–"}</td><td>${a.ageOk?"60未満":"–"}</td>
+    </tr>`).join("")||`<tr><td class="l" colspan="12">該当なし</td></tr>`}</tbody></table></div>`;
+}
+
+function showSelDetail(i){
+  const o=DATA.offices[i], area=o.area||"その他", apps=o.applicants||[], b=o.bySelection||{};
+  // ① 稼働率
+  const rateRows=SEL_GRADES.map(([g,l])=>{const s=b[g]||{new:0,re:0,started:0};const cnt=s.new+s.re;const rate=cnt?Math.round(s.started/cnt*100):0;
+    return `<tr><td class="l">${l}</td><td>${num(cnt)}</td><td>${num(s.started)}</td><td>${meter(rate)}</td></tr>`;}).join("");
+  const actPanel=`<div class="panel"><div class="panel-head"><h2>① 人選ごとの稼働率</h2><span class="hint">稼働＝就業開始（開始日あり）÷ 人選数</span></div>
+    <div class="scroll"><table><thead><tr><th class="l">人選</th><th>人選数</th><th>稼働(開始)</th><th>稼働率</th></tr></thead><tbody>${rateRows}</tbody></table></div></div>`;
+  // ②③ A/B 明細
+  const aApps=apps.filter(a=>a.grade==="A"), bApps=apps.filter(a=>a.grade==="B"), cApps=apps.filter(a=>a.grade==="C");
+  const aPanel=`<div class="panel"><div class="panel-head"><h2>② A人選 応募者明細</h2><span class="hint">${aApps.length}名</span></div>${appTable(aApps)}</div>`;
+  const bPanel=`<div class="panel"><div class="panel-head"><h2>③ B人選 応募者明細</h2><span class="hint">${bApps.length}名</span></div>${appTable(bApps)}</div>`;
+  // ④ C人選: 注力2カテゴリで絞り込み
+  if(!cFocusByArea[area]) cFocusByArea[area]=["exp","qual"];
+  const focus=cFocusByArea[area];
+  const cBtns=C_CATS.map(([k,l])=>`<button class="catbtn ${focus.includes(k)?"on":""}" data-cat="${k}">${l}</button>`).join("");
+  const cFiltered=focus.length?cApps.filter(a=>focus.every(k=>a[k])):cApps;
+  const focusLabel=focus.map(k=>(C_CATS.find(c=>c[0]===k)||[])[1]).join(" ＋ ")||"未選択";
+  const cPanel=`<div class="panel"><div class="panel-head"><h2>④ C人選（注力2カテゴリ該当）</h2><span class="hint">${area}｜注力: ${focusLabel}</span></div>
+    <div style="padding:10px 16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center"><span style="font-size:12px;color:var(--muted)">注力カテゴリ（2つ選択）:</span>${cBtns}<span style="font-size:11px;color:var(--muted)">該当 ${cFiltered.length}/${cApps.length}名</span></div>
+    ${appTable(cFiltered)}</div>`;
+  $("#selDetailView").innerHTML=`
+    <button class="back" id="sBack">← 人選一覧に戻る</button>
+    <div class="detail-head"><h2>${o.office}</h2><span class="pref">${area}</span>
+      <span style="margin-left:auto;display:flex;gap:6px"><button id="sPrev">‹ 前</button><button id="sNext">次 ›</button></span></div>
+    ${actPanel}${aPanel}${bPanel}${cPanel}`;
+  $("#selListView").classList.add("hidden"); $("#selDetailView").classList.remove("hidden");
+  $("#sBack").addEventListener("click",showSelList);
+  $("#sPrev").addEventListener("click",()=>showSelDetail((i-1+DATA.offices.length)%DATA.offices.length));
+  $("#sNext").addEventListener("click",()=>showSelDetail((i+1)%DATA.offices.length));
+  document.querySelectorAll("#selDetailView .catbtn").forEach(btn=>btn.addEventListener("click",()=>{
+    const cat=btn.dataset.cat; let f=cFocusByArea[area].slice();
+    if(f.includes(cat)) f=f.filter(x=>x!==cat); else { f.push(cat); if(f.length>2) f.shift(); }
+    cFocusByArea[area]=f; showSelDetail(i);
+  }));
+  window.scrollTo(0,0);
+}
+function showSelList(){ $("#selDetailView").classList.add("hidden"); $("#selListView").classList.remove("hidden"); }
+
+/* ===== セクション切替（サイドバー） ===== */
+const SECMETA={
+  office:{title:"応募ダッシュボード",sub:"オフィス別｜総応募・MCG・人選を突合した集計ビュー"},
+  media:{title:"媒体別パフォーマンス",sub:"応募媒体ごと｜オフィス別の内訳まで（Indeed・キューメイトは統合）"},
+  selection:{title:"人選別",sub:"人選グレード×新規/再応募｜オフィス・エリア小計／詳細で稼働率・応募者明細"},
+};
+function switchSection(sec){
+  ["office","media","selection"].forEach(k=>{
+    $("#"+(k==="office"?"officeSection":k==="media"?"mediaSection":"selectionSection")).classList.toggle("hidden",k!==sec);
+  });
+  $("#navOffice").classList.toggle("active",sec==="office");
+  $("#navMedia").classList.toggle("active",sec==="media");
+  $("#navSel").classList.toggle("active",sec==="selection");
+  $("#secTitle").textContent=SECMETA[sec].title; $("#secSub").textContent=SECMETA[sec].sub;
+  if(sec==="media"){ renderMediaList(); showMediaList(); }
+  else if(sec==="selection"){ renderSelList(); showSelList(); }
+  else showList();
+}
+
+function activeSection(){
+  if(!$("#mediaSection").classList.contains("hidden")) return "media";
+  if(!$("#selectionSection").classList.contains("hidden")) return "selection";
+  return "office";
+}
 function render(){
   if(!DATA.daily||!DATA.daily.length) DATA.daily=genDaily(DATA.month); // モック補完
-  renderList(); renderMediaList();
-  const mediaActive = !$("#mediaSection").classList.contains("hidden");
-  if(mediaActive) showMediaList(); else showList();
+  renderList(); renderMediaList(); renderSelList();
+  const a=activeSection();
+  if(a==="media") showMediaList(); else if(a==="selection") showSelList(); else showList();
   const tag = API_URL ? "" : "（モックデータ）";
   $("#updated").textContent="集計時刻: "+new Date(DATA.generatedAt).toLocaleString("ja-JP")+tag;
 }
@@ -624,6 +725,7 @@ $("#monthSel").addEventListener("change",refresh);
 $("#officeChartMode").addEventListener("change",renderChart);
 $("#navOffice").addEventListener("click",()=>switchSection("office"));
 $("#navMedia").addEventListener("click",()=>switchSection("media"));
+$("#navSel").addEventListener("click",()=>switchSection("selection"));
 selectCurrentMonth();
 refresh();
 </script>

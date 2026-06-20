@@ -304,7 +304,30 @@ function runDailyAggregation(monthArg) {
     }
 
     // 人選（当月応募・A/B/C/その他）
-    if (inMonth) { bumpSelection_(acc[office].selection, letter); bumpSelection_(mo.selection, letter); }
+    if (inMonth) {
+      bumpSelection_(acc[office].selection, letter); bumpSelection_(mo.selection, letter);
+      // 人選別: グレード×新規/再・稼働(就業開始)。A/B/Cは応募者明細も保持。
+      const g = (letter === 'A' || letter === 'B' || letter === 'C') ? letter : 'ou';
+      const isRe = !!rePhoneInMonth[phone];
+      const started = !!parseDate_(row[MCGI.startNew]);
+      const bs = acc[office].bySelection[g];
+      if (isRe) bs.re += 1; else bs.new += 1;
+      if (started) bs.started += 1;
+      if (g !== 'ou') {
+        const qual = (row[MCGI.qual] || '').toString().indexOf('有資格') >= 0;
+        const exp = (row[MCGI.exp] || '').toString().trim() === '有';
+        const wd = (row[MCGI.workdays] || '').toString().indexOf('LT') >= 0;
+        const ageOk = !(Number(row[MCGI.age]) >= 60);
+        acc[office].applicants.push({
+          name: (row[1] || '').toString().trim(), phone: (row[MCGI.phone] || '').toString().trim(),
+          age: row[MCGI.age], pref: (row[MCGI.pref] || '').toString().trim(), media: media,
+          grade: g, newRe: isRe ? 're' : 'new', started: started,
+          startDate: started ? fmtDate_(parseDate_(row[MCGI.startNew])) : '',
+          contact: (row[MCGI.contactStatus] || '').toString().replace(/\s+/g, ' ').trim(),
+          qual: qual, exp: exp, wd: wd, ageOk: ageOk,
+        });
+      }
+    }
 
     // 歩留: コホート(初回応募日で判定) × 各ステージ「日付列が当月のもの」をカウント
     // 当月内応募・新規 ⊂ 2ヶ月以内応募・新規（当月含む直近2ヶ月）なので両方に加算しうる。
@@ -501,6 +524,8 @@ function newOfficeAcc_(office, prefs, target, area) {
     overview: { newApplications: 0, phoneApplications: 0, reApplications: 0, targetNew: target, forecast: 0, contacts: 0, newAB: 0, reAB: 0 },
     selection: { A: 0, B: 0, C: 0, other: 0, unknown: 0 },
     funnel: { currentMonthNew: fnl(), within2MonthsNew: fnl(), reApplication: fnl() },
+    bySelection: { A: { new: 0, re: 0, started: 0 }, B: { new: 0, re: 0, started: 0 }, C: { new: 0, re: 0, started: 0 }, ou: { new: 0, re: 0, started: 0 } },
+    applicants: [], // A/B/C の応募者明細（条件フラグ付き）
   };
 }
 
