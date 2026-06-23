@@ -338,8 +338,9 @@ function runDailyAggregation(monthArg) {
       }
     }
 
-    // 歩留: コホート(初回応募日で判定) × 各ステージ「日付列が当月のもの」をカウント
-    // 当月内応募・新規 ⊂ 2ヶ月以内応募・新規（当月含む直近2ヶ月）なので両方に加算しうる。
+    // 歩留(媒体別): コホート(初回応募日で判定) × 各ステージ「日付列が当月のもの」。
+    // ※オフィス別の歩留は当月人選シートが当月応募しか持たず前月以前の開始を取りこぼすため、
+    //   稼働データ(全期間)基準で fillActivityFromHistory_ にて別途集計する（mediaはここで集計）。
     const fd = firstDateByPhone[phone];
     const cohorts = [];
     if (fd) {
@@ -348,19 +349,17 @@ function runDailyAggregation(monthArg) {
     }
     if (rePhoneInMonth[phone]) cohorts.push('reApplication'); // 当月に再応募した人のみ
     cohorts.forEach(c => {
-      const f = acc[office].funnel[c];
       const fm = mo.funnel[c];
       FUNNEL_STAGES.forEach(([outKey, idxKey]) => {
-        const sd = parseDate_(row[MCGI[idxKey]]);
-        if (inRange_(sd, range.monthStart, range.monthEnd)) { f[outKey] += 1; fm[outKey] += 1; } // その日付が当月
+        if (inRange_(parseDate_(row[MCGI[idxKey]]), range.monthStart, range.monthEnd)) fm[outKey] += 1; // その日付が当月
       });
-      if (ab && phone) { f._abPhones.add(phone); fm._abPhones.add(phone); }
+      if (ab && phone) fm._abPhones.add(phone);
     });
   });
 
-  // 設定数/開始数 と ④開始の応募月分布は「稼働データ(全期間)」基準で集計する。
+  // 設定数/開始数・④開始の応募月分布(新規/再応募)・オフィス別の歩留(③)は「稼働データ(全期間)」基準で集計。
   // 当月人選シートは当月応募しか載らないため、前月以前に応募して当月に設定/開始した人を取りこぼす。
-  try { fillActivityFromHistory_(acc, prefToOffice, range); }
+  try { fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, rePhoneInMonth); }
   catch (e) { Logger.log('activity-from-history skipped: ' + e); }
 
   // --- 仕上げ ---
@@ -801,22 +800,50 @@ function readLatestCsvMatrix_(folderId, charset) {
   return data.length < 2 ? [] : data.slice(1);
 }
 
-// 稼働データ(MCGフォルダ・全期間)から、各オフィスの「当月に設定/開始した件数」と
-// 「当月開始者の応募月(yyyy-MM)分布」を集計して acc に書き込む（応募月は問わない）。
-function fillActivityFromHistory_(acc, prefToOffice, range) {
+// 稼働データ(MCGフォルダ・全期間)から、各オフィスの
+//   ・当月に設定/開始した件数（一覧の設定数/開始数）
+//   ・当月開始者の応募月(yyyy-MM)分布（新規/再応募つき, ④）
+//   ・歩留(③)＝コホート(初回応募日で判定)×各ステージの当月件数 ＋ A+B参考
+// を集計して acc に書き込む。新規/再応募の判定は総応募由来の firstDateByPhone を使う。
+function fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, rePhoneInMonth) {
+  firstDateByPhone = firstDateByPhone || {};
+  rePhoneInMonth = rePhoneInMonth || {};
   const rows = readLatestCsvMatrix_(CONFIG.MCG_FOLDER_ID, CONFIG.CHARSET_MCG);
   let setHit = 0, startHit = 0, minA = null, maxA = null;
   rows.forEach(row => {
     const office = prefToOffice[(row[MCGI.pref] || '').toString().trim()];
     if (!office || !acc[office]) return;
+    const phone = normPhone_(row[MCGI.phone]);
     const ad = parseDate_(row[MCGI.applyDate]);
     if (ad) { if (!minA || ad < minA) minA = ad; if (!maxA || ad > maxA) maxA = ad; }
+    const letter = judgeFromRow_(row);
+    const ab = letter === 'A' || letter === 'B';
+    const fd = firstDateByPhone[phone];
+    const isRe = !!(fd && ad && ad.getTime() > fd.getTime()); // 総応募の初回より後の応募＝再応募
+
+    // 一覧の設定数/開始数 と ④開始の応募月分布（新規/再応募つき）
     if (inRange_(parseDate_(row[MCGI.setNew]), range.monthStart, range.monthEnd)) { acc[office].overview.setMonth += 1; setHit += 1; }
     if (inRange_(parseDate_(row[MCGI.startNew]), range.monthStart, range.monthEnd)) {
       acc[office].overview.startedMonth += 1; startHit += 1;
       const k = ad ? Utilities.formatDate(ad, CONFIG.TZ, 'yyyy-MM') : '不明';
-      acc[office].startedApply[k] = (acc[office].startedApply[k] || 0) + 1;
+      const b = acc[office].startedApply[k] || (acc[office].startedApply[k] = { total: 0, new: 0, re: 0 });
+      b.total += 1; if (isRe) b.re += 1; else b.new += 1;
     }
+
+    // 歩留(③・オフィス別): コホート × 各ステージ「日付列が当月のもの」
+    const cohorts = [];
+    if (fd) {
+      if (inRange_(fd, range.monthStart, range.monthEnd)) cohorts.push('currentMonthNew');
+      if (inRange_(fd, range.twoMonthStart, range.monthEnd)) cohorts.push('within2MonthsNew');
+    }
+    if (rePhoneInMonth[phone]) cohorts.push('reApplication');
+    cohorts.forEach(c => {
+      const f = acc[office].funnel[c];
+      FUNNEL_STAGES.forEach(([outKey, idxKey]) => {
+        if (inRange_(parseDate_(row[MCGI[idxKey]]), range.monthStart, range.monthEnd)) f[outKey] += 1;
+      });
+      if (ab && phone) f._abPhones.add(phone);
+    });
   });
   Logger.log('activity-from-history: rows=%s 当月設定=%s 当月開始=%s 応募日range=%s〜%s',
     rows.length, setHit, startHit, minA ? fmtDate_(minA) : '-', maxA ? fmtDate_(maxA) : '-');
