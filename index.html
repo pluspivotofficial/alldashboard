@@ -145,6 +145,7 @@
     <button class="nav-item active" id="navOffice" data-sec="office">🏢 オフィス別</button>
     <button class="nav-item" id="navMedia" data-sec="media">📣 媒体別</button>
     <button class="nav-item" id="navSel" data-sec="selection">👥 人選別</button>
+    <button class="nav-item" id="navAna" data-sec="analysis">📈 分析</button>
   </aside>
   <div class="main"><div class="wrap">
   <header class="top">
@@ -199,6 +200,11 @@
   <div id="selectionSection" class="hidden">
     <div id="selListView"></div>
     <div id="selDetailView" class="hidden"></div>
+  </div>
+
+  <!-- ===== 分析セクション ===== -->
+  <div id="analysisSection" class="hidden">
+    <div id="analysisView"></div>
   </div>
 
   <p class="updated" id="updated"></p>
@@ -679,35 +685,95 @@ function showSelDetail(i){
 }
 function showSelList(){ $("#selDetailView").classList.add("hidden"); $("#selListView").classList.remove("hidden"); }
 
+/* ===== 分析ビュー（LTV・2ヶ月用活用） ===== */
+let ANALYSIS=null;
+const LTV_FE=["set","done","dec","start"], U2_FE=["応募","設定","実施","決定","開始"];
+async function loadAnalysis(force){
+  if(ANALYSIS && !ANALYSIS.error && !force) return;
+  if(!API_URL){ ANALYSIS={error:"API未設定"}; return; }
+  try{ const res=await fetch(`${API_URL}?analysis=1&t=${Date.now()}`); ANALYSIS=await res.json(); }
+  catch(e){ ANALYSIS={error:String(e)}; }
+}
+function groupByArea_(objMap){
+  const groups={}; Object.keys(objMap).forEach(off=>{const ar=objMap[off].area||"(未割当)";(groups[ar]=groups[ar]||[]).push(off);});
+  const areas=Object.keys(groups).sort((a,b)=>{const ia=AREA_ORDER.indexOf(a),ib=AREA_ORDER.indexOf(b);return (ia<0?99:ia)-(ib<0?99:ib);});
+  return {groups,areas};
+}
+function ltvCells_(node){
+  const g=grp=>LTV_FE.map(k=>{const c=node[grp]&&node[grp][k]; return `<td>${c&&c.avg!=null?c.avg+'<span class="pref"> ('+c.n+')</span>':'–'}</td>`;}).join("");
+  return g("new")+g("re");
+}
+function ltvPanel_(ltv){
+  const {groups,areas}=groupByArea_(ltv.offices||{});
+  let body="";
+  areas.forEach(ar=>{
+    groups[ar].forEach(off=>{ body+=`<tr><td class="l office">${off}</td>${ltvCells_(ltv.offices[off])}</tr>`; });
+    if(areas.length>1 && ltv.areas[ar]) body+=`<tr class="subtotal"><td class="l">小計：${ar}</td>${ltvCells_(ltv.areas[ar])}</tr>`;
+  });
+  return `<div class="panel">
+    <div class="panel-head"><h2>LTV分析（応募→各ステージ 平均経過日数）</h2><span class="hint">${ltv.window.from}〜${ltv.window.to}／上下10%除外・(n)=件数</span></div>
+    <div class="scroll"><table>
+      <thead><tr><th class="l" rowspan="2">オフィス</th><th colspan="4">新規（経過日数）</th><th colspan="4">再応募（経過日数）</th></tr>
+      <tr><th>設定</th><th>実施</th><th>決定</th><th>開始</th><th>設定</th><th>実施</th><th>決定</th><th>開始</th></tr></thead>
+      <tbody>${body||`<tr><td class="l" colspan="9">データなし</td></tr>`}</tbody>
+    </table></div></div>`;
+}
+function u2Cells_(node){ const g=grp=>U2_FE.map(k=>`<td>${num(node[grp][k])}</td>`).join(""); return g("new")+g("re"); }
+function util2mPanel_(u){
+  const {groups,areas}=groupByArea_(u.offices||{});
+  let body="";
+  areas.forEach(ar=>{
+    groups[ar].forEach(off=>{ body+=`<tr><td class="l office">${off}</td>${u2Cells_(u.offices[off])}</tr>`; });
+    if(areas.length>1 && u.areas[ar]) body+=`<tr class="subtotal"><td class="l">小計：${ar}</td>${u2Cells_(u.areas[ar])}</tr>`;
+  });
+  return `<div class="panel">
+    <div class="panel-head"><h2>2ヶ月用活用（前月 ${u.month} の歩留）</h2><span class="hint">応募→設定→実施→決定→開始（件数）</span></div>
+    <div class="scroll"><table>
+      <thead><tr><th class="l" rowspan="2">オフィス</th><th colspan="5">新規</th><th colspan="5">再応募</th></tr>
+      <tr>${U2_FE.map(k=>`<th>${k}</th>`).join("")}${U2_FE.map(k=>`<th>${k}</th>`).join("")}</tr></thead>
+      <tbody>${body||`<tr><td class="l" colspan="11">データなし</td></tr>`}</tbody>
+    </table></div></div>`;
+}
+function renderAnalysis(){
+  const a=ANALYSIS;
+  if(!a){ $("#analysisView").innerHTML=`<div class="panel"><div style="padding:20px;color:var(--muted)">読み込み中…</div></div>`; return; }
+  if(a.error){ $("#analysisView").innerHTML=`<div class="panel"><div class="panel-head"><h2>分析</h2></div><div style="padding:16px;color:var(--muted)">分析データが未生成です。GASエディタで <b>runAnalysis</b> を1回実行してください。<br><span style="font-size:11px">(${a.error})</span></div></div>`; return; }
+  $("#analysisView").innerHTML = ltvPanel_(a.ltv) + util2mPanel_(a.util2m) +
+    `<p class="updated">分析生成: ${new Date(a.generatedAt).toLocaleString("ja-JP")}（履歴 ${num(a.records)}件）</p>`;
+}
+
 /* ===== セクション切替（サイドバー） ===== */
 const SECMETA={
   office:{title:"応募ダッシュボード",sub:"オフィス別｜総応募・MCG・人選を突合した集計ビュー"},
   media:{title:"媒体別パフォーマンス",sub:"応募媒体ごと｜オフィス別の内訳まで（Indeed・キューメイトは統合）"},
   selection:{title:"人選別",sub:"人選グレード×新規/再応募｜オフィス・エリア小計／詳細で稼働率・応募者明細"},
+  analysis:{title:"分析",sub:"LTV分析（180日前〜20日前）・2ヶ月用活用（前月の歩留）｜オフィス・エリア小計"},
 };
+const SECID={office:"officeSection",media:"mediaSection",selection:"selectionSection",analysis:"analysisSection"};
 function switchSection(sec){
-  ["office","media","selection"].forEach(k=>{
-    $("#"+(k==="office"?"officeSection":k==="media"?"mediaSection":"selectionSection")).classList.toggle("hidden",k!==sec);
-  });
+  Object.keys(SECID).forEach(k=>$("#"+SECID[k]).classList.toggle("hidden",k!==sec));
   $("#navOffice").classList.toggle("active",sec==="office");
   $("#navMedia").classList.toggle("active",sec==="media");
   $("#navSel").classList.toggle("active",sec==="selection");
+  $("#navAna").classList.toggle("active",sec==="analysis");
   $("#secTitle").textContent=SECMETA[sec].title; $("#secSub").textContent=SECMETA[sec].sub;
   if(sec==="media"){ renderMediaList(); showMediaList(); }
   else if(sec==="selection"){ renderSelList(); showSelList(); }
+  else if(sec==="analysis"){ renderAnalysis(); loadAnalysis().then(renderAnalysis); }
   else showList();
 }
 
 function activeSection(){
   if(!$("#mediaSection").classList.contains("hidden")) return "media";
   if(!$("#selectionSection").classList.contains("hidden")) return "selection";
+  if(!$("#analysisSection").classList.contains("hidden")) return "analysis";
   return "office";
 }
 function render(){
   if(!DATA.daily||!DATA.daily.length) DATA.daily=genDaily(DATA.month); // モック補完
   renderList(); renderMediaList(); renderSelList();
   const a=activeSection();
-  if(a==="media") showMediaList(); else if(a==="selection") showSelList(); else showList();
+  if(a==="media") showMediaList(); else if(a==="selection") showSelList(); else if(a==="analysis") renderAnalysis(); else showList();
   const tag = API_URL ? "" : "（モックデータ）";
   $("#updated").textContent="集計時刻: "+new Date(DATA.generatedAt).toLocaleString("ja-JP")+tag;
 }
@@ -726,6 +792,7 @@ $("#officeChartMode").addEventListener("change",renderChart);
 $("#navOffice").addEventListener("click",()=>switchSection("office"));
 $("#navMedia").addEventListener("click",()=>switchSection("media"));
 $("#navSel").addEventListener("click",()=>switchSection("selection"));
+$("#navAna").addEventListener("click",()=>switchSection("analysis"));
 selectCurrentMonth();
 refresh();
 </script>

@@ -105,6 +105,10 @@ const FUNNEL_STAGES = [
  * Web API
  * ========================================================================= */
 function doGet(e) {
+  if (e && e.parameter && e.parameter.analysis) { // 分析データ（LTV・2ヶ月用活用）
+    const a = readAnalysisFromDrive_() || JSON.stringify({ error: 'analysis not generated yet' });
+    return ContentService.createTextOutput(a).setMimeType(ContentService.MimeType.JSON);
+  }
   const month = (e && e.parameter && e.parameter.month) || currentMonthKey_();
   let json = CacheService.getScriptCache().get(CONFIG.CACHE_KEY + ':' + month);
   if (!json) json = readSummaryFromDrive_(month);
@@ -402,6 +406,107 @@ function runDailyAggregation(monthArg) {
 
 /* 手元確認用: データのある月（例 2026-05）で実行 */
 function runForMay2026() { return runDailyAggregation('2026-05'); }
+
+/* =========================================================================
+ * 分析: LTV（応募→各ステージ経過日数）／2ヶ月用活用（前月の歩留）
+ *   履歴ソース = MCG_FOLDER_ID の最新CSV（Shift_JIS・【真子】集客項目出力、列はMCGI準拠）。
+ *   新規/再応募 = 履歴内で電話番号の初出=新規/以降=再応募。
+ *   LTV = 上下10%除外のトリム平均、対象=180日前〜20日前（直近20日は除外）。
+ *   重いので本集計とは分離。runAnalysis を実行 → analysis.json 保存。
+ * ========================================================================= */
+function runAnalysis() {
+  const today = new Date();
+  const rows = readLatestCsvMatrix_(CONFIG.MCG_FOLDER_ID, CONFIG.CHARSET_MCG);
+  const prefToOffice = loadPrefToOffice_();
+  const officeArea = loadOfficeArea_();
+
+  const recs = [];
+  rows.forEach(r => {
+    const d = parseDate_(r[MCGI.applyDate]);
+    if (!d) return;
+    const office = prefToOffice[(r[MCGI.pref] || '').toString().trim()] || '';
+    recs.push({
+      d: d, phone: normPhone_(r[MCGI.phone]), office: office, area: officeArea[office] || '(未割当)',
+      set: parseDate_(r[MCGI.setNew]), done: parseDate_(r[MCGI.doneNew]),
+      dec: parseDate_(r[MCGI.decNew]), start: parseDate_(r[MCGI.startNew]),
+    });
+  });
+  recs.sort((a, b) => a.d - b.d);
+  const seen = {};
+  recs.forEach(x => { if (x.phone) { x.re = !!seen[x.phone]; seen[x.phone] = true; } else x.re = false; });
+
+  const analysis = {
+    generatedAt: new Date().toISOString(),
+    records: recs.length,
+    ltv: buildLtv_(recs, today),
+    util2m: buildUtil2m_(recs, today),
+  };
+  saveAnalysis_(JSON.stringify(analysis));
+  Logger.log('analysis: records=%s ltv=%s〜%s util2m=%s', recs.length, analysis.ltv.window.from, analysis.ltv.window.to, analysis.util2m.month);
+  return analysis;
+}
+
+const DAY_MS = 86400000;
+const LTV_STAGES = ['set', 'done', 'dec', 'start'];
+function trimMean10_(arr) {
+  if (!arr.length) return null;
+  const s = arr.slice().sort((a, b) => a - b);
+  const cut = Math.floor(s.length * 0.1);
+  const t = (s.length - 2 * cut) > 0 ? s.slice(cut, s.length - cut) : s;
+  return Math.round(t.reduce((a, b) => a + b, 0) / t.length * 10) / 10;
+}
+function ltvBucket_(map, key, area) {
+  if (!map[key]) { map[key] = { area: area, new: {}, re: {} }; LTV_STAGES.forEach(k => { map[key].new[k] = []; map[key].re[k] = []; }); }
+  return map[key];
+}
+function ltvFinalize_(map) {
+  const out = {};
+  Object.keys(map).forEach(key => {
+    const m = map[key]; out[key] = { area: m.area, new: {}, re: {} };
+    ['new', 're'].forEach(g => LTV_STAGES.forEach(k => { out[key][g][k] = { avg: trimMean10_(m[g][k]), n: m[g][k].length }; }));
+  });
+  return out;
+}
+function buildLtv_(recs, today) {
+  const lo = new Date(today.getTime() - 180 * DAY_MS), hi = new Date(today.getTime() - 20 * DAY_MS);
+  const off = {}, are = {};
+  recs.forEach(x => {
+    if (!(x.d >= lo && x.d <= hi) || !x.office) return;
+    const g = x.re ? 're' : 'new';
+    const ob = ltvBucket_(off, x.office, x.area), ab = ltvBucket_(are, x.area, x.area);
+    LTV_STAGES.forEach(k => { const sd = x[k]; if (sd && sd >= x.d) { const days = Math.round((sd - x.d) / DAY_MS); ob[g][k].push(days); ab[g][k].push(days); } });
+  });
+  return { window: { from: fmtDate_(lo), to: fmtDate_(hi) }, offices: ltvFinalize_(off), areas: ltvFinalize_(are) };
+}
+
+function u2Bucket_(map, key, area) {
+  if (!map[key]) map[key] = { area: area, new: { 応募: 0, 設定: 0, 実施: 0, 決定: 0, 開始: 0 }, re: { 応募: 0, 設定: 0, 実施: 0, 決定: 0, 開始: 0 } };
+  return map[key];
+}
+function buildUtil2m_(recs, today) {
+  const y = today.getFullYear(), m = today.getMonth();
+  const lo = new Date(y, m - 1, 1), hi = new Date(y, m, 0, 23, 59, 59);
+  const off = {}, are = {};
+  recs.forEach(x => {
+    if (!(x.d >= lo && x.d <= hi) || !x.office) return;
+    const g = x.re ? 're' : 'new';
+    [[off, x.office], [are, x.area]].forEach(pair => {
+      const b = u2Bucket_(pair[0], pair[1], x.area);
+      b[g].応募 += 1; if (x.set) b[g].設定 += 1; if (x.done) b[g].実施 += 1; if (x.dec) b[g].決定 += 1; if (x.start) b[g].開始 += 1;
+    });
+  });
+  return { month: Utilities.formatDate(lo, CONFIG.TZ, 'yyyy-MM'), offices: off, areas: are };
+}
+
+function saveAnalysis_(json) {
+  const folder = DriveApp.getFolderById(CONFIG.OUTPUT_FOLDER_ID);
+  const it = folder.getFilesByName('analysis.json');
+  if (it.hasNext()) it.next().setContent(json); else folder.createFile('analysis.json', json, 'application/json');
+}
+function readAnalysisFromDrive_() {
+  const it = DriveApp.getFolderById(CONFIG.OUTPUT_FOLDER_ID).getFilesByName('analysis.json');
+  return it.hasNext() ? it.next().getBlob().getDataAsString('UTF-8') : null;
+}
 
 /* =========================================================================
  * 区分・人選の判定
