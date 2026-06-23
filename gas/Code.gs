@@ -307,15 +307,6 @@ function runDailyAggregation(monthArg) {
       mo.overview.contacts += 1;
     }
 
-    // 当月に発生した設定/開始（応募月は問わない）→ 一覧の設定数/開始数 と ④開始の応募月分布
-    if (inRange_(parseDate_(row[MCGI.setNew]), range.monthStart, range.monthEnd)) acc[office].overview.setMonth += 1;
-    if (inRange_(parseDate_(row[MCGI.startNew]), range.monthStart, range.monthEnd)) {
-      acc[office].overview.startedMonth += 1;
-      const ad = parseDate_(row[MCGI.applyDate]);
-      const k = ad ? Utilities.formatDate(ad, CONFIG.TZ, 'yyyy-MM') : '不明';
-      acc[office].startedApply[k] = (acc[office].startedApply[k] || 0) + 1;
-    }
-
     // 人選（当月応募・A/B/C/その他）
     if (inMonth) {
       bumpSelection_(acc[office].selection, letter); bumpSelection_(mo.selection, letter);
@@ -361,6 +352,11 @@ function runDailyAggregation(monthArg) {
       if (ab && phone) { f._abPhones.add(phone); fm._abPhones.add(phone); }
     });
   });
+
+  // 設定数/開始数 と ④開始の応募月分布は「稼働データ(全期間)」基準で集計する。
+  // 当月人選シートは当月応募しか載らないため、前月以前に応募して当月に設定/開始した人を取りこぼす。
+  try { fillActivityFromHistory_(acc, prefToOffice, range); }
+  catch (e) { Logger.log('activity-from-history skipped: ' + e); }
 
   // --- 仕上げ ---
   const elapsed = elapsedDays_(month), totalDays = daysInMonth_(month);
@@ -798,6 +794,27 @@ function readLatestCsvMatrix_(folderId, charset) {
   if (!f) { Logger.log('CSV not found in folder ' + folderId); return []; }
   const data = Utilities.parseCsv((f.getBlob().getDataAsString(charset || 'UTF-8') || '').replace(/^﻿/, ''));
   return data.length < 2 ? [] : data.slice(1);
+}
+
+// 稼働データ(MCGフォルダ・全期間)から、各オフィスの「当月に設定/開始した件数」と
+// 「当月開始者の応募月(yyyy-MM)分布」を集計して acc に書き込む（応募月は問わない）。
+function fillActivityFromHistory_(acc, prefToOffice, range) {
+  const rows = readLatestCsvMatrix_(CONFIG.MCG_FOLDER_ID, CONFIG.CHARSET_MCG);
+  let setHit = 0, startHit = 0, minA = null, maxA = null;
+  rows.forEach(row => {
+    const office = prefToOffice[(row[MCGI.pref] || '').toString().trim()];
+    if (!office || !acc[office]) return;
+    const ad = parseDate_(row[MCGI.applyDate]);
+    if (ad) { if (!minA || ad < minA) minA = ad; if (!maxA || ad > maxA) maxA = ad; }
+    if (inRange_(parseDate_(row[MCGI.setNew]), range.monthStart, range.monthEnd)) { acc[office].overview.setMonth += 1; setHit += 1; }
+    if (inRange_(parseDate_(row[MCGI.startNew]), range.monthStart, range.monthEnd)) {
+      acc[office].overview.startedMonth += 1; startHit += 1;
+      const k = ad ? Utilities.formatDate(ad, CONFIG.TZ, 'yyyy-MM') : '不明';
+      acc[office].startedApply[k] = (acc[office].startedApply[k] || 0) + 1;
+    }
+  });
+  Logger.log('activity-from-history: rows=%s 当月設定=%s 当月開始=%s 応募日range=%s〜%s',
+    rows.length, setHit, startHit, minA ? fmtDate_(minA) : '-', maxA ? fmtDate_(maxA) : '-');
 }
 
 function saveSummary_(month, json) {
