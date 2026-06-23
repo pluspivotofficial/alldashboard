@@ -109,6 +109,11 @@ function doGet(e) {
     const a = readAnalysisFromDrive_() || JSON.stringify({ error: 'analysis not generated yet' });
     return ContentService.createTextOutput(a).setMimeType(ContentService.MimeType.JSON);
   }
+  if (e && e.parameter && e.parameter.export === 'selection') { // 人選CSV出力（人材番号＋人選ｽﾃｰﾀｽ）
+    const fname = '人選ｽﾃｰﾀｽ_' + Utilities.formatDate(new Date(), CONFIG.TZ, 'yyyyMMdd') + '.csv';
+    return ContentService.createTextOutput(buildSelectionCsv_())
+      .setMimeType(ContentService.MimeType.CSV).downloadAsFile(fname);
+  }
   const month = (e && e.parameter && e.parameter.month) || currentMonthKey_();
   let json = CacheService.getScriptCache().get(CONFIG.CACHE_KEY + ':' + month);
   if (!json) json = readSummaryFromDrive_(month);
@@ -229,6 +234,8 @@ function runDailyAggregation(monthArg) {
   const parsed = totalRows.map(r => ({
     office: r[COL.total.office] || prefToOffice[(r[COL.total.pref] || '').trim()],
     phone: normPhone_(r[COL.total.phone]),
+    phoneRaw: (r[COL.total.phone] || '').toString().trim(),
+    name: (r['氏名（漢字）'] || r['氏名'] || r['お名前'] || '').toString().trim(),
     media: normMedia_(r[COL.total.media]),
     d: parseDate_(r[COL.total.applyDate]),
   })).filter(x => x.d);
@@ -361,8 +368,12 @@ function runDailyAggregation(monthArg) {
 
   // 設定数/開始数・④開始の応募月分布(新規/再応募)・オフィス別の歩留(③)は「稼働データ(全期間)」基準で集計。
   // 当月人選シートは当月応募しか載らないため、前月以前に応募して当月に設定/開始した人を取りこぼす。
-  try { fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, lastDateByPhone); }
+  const mcgPhoneSet = new Set(); // 稼働データ(②)に存在する電話 → 未登録者の割り出しに使う
+  try { fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, lastDateByPhone, mcgPhoneSet); }
   catch (e) { Logger.log('activity-from-history skipped: ' + e); }
+
+  // 前日(最新応募日)の未登録者＝総応募にあって稼働データに電話が無い応募者
+  const unregistered = computeUnregistered_(parsed, mcgPhoneSet);
 
   // --- 仕上げ ---
   const elapsed = elapsedDays_(month), totalDays = daysInMonth_(month);
@@ -404,6 +415,7 @@ function runDailyAggregation(monthArg) {
     daily: daily,
     offices: Object.values(acc).filter(hasAnyData_),
     media: mediaOut,
+    unregistered: unregistered,
   };
 
   saveSummary_(month, JSON.stringify(summary));
@@ -600,6 +612,24 @@ function senbatsuLabel_(letter) {
 /* =========================================================================
  * 当月人選シート(1NsC65W)の読み書き
  * ========================================================================= */
+// 人選CSV出力: 当月人選シートから「人材番号(15列目)＋人選ｽﾃｰﾀｽ(29列目)」だけを抽出したCSV本文を返す。
+// Excelで文字化けしないよう先頭にBOM、改行はCRLF。
+function buildSelectionCsv_() {
+  const rows = readSenbatsuRows_();
+  const out = ['人材番号,人選ｽﾃｰﾀｽ'];
+  rows.forEach(r => {
+    const id = (r[14] != null ? r[14] : '').toString().trim();   // 人材番号
+    const st = (r[28] != null ? r[28] : '').toString().trim();   // 人選ｽﾃｰﾀｽ
+    if (!id && !st) return;
+    out.push(csvCell_(id) + ',' + csvCell_(st));
+  });
+  return '﻿' + out.join('\r\n');
+}
+function csvCell_(v) {
+  v = (v == null ? '' : v).toString();
+  return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+}
+
 // 集計用に当月人選シートを行配列（ヘッダー除く）で返す。列はMCGI(列インデックス)準拠。
 function readSenbatsuRows_() {
   const sh = SpreadsheetApp.openById(CONFIG.SENBATSU_SHEET_ID).getSheets()[0];
@@ -795,6 +825,27 @@ function latestCsvFile_(folderId) {
 }
 
 // 最新CSVを「データ行の配列(行=配列)」で返す（重複ヘッダーがある⑤用。ヘッダー行は除外）
+// 前日(=総応募の最新応募日)の未登録者を割り出す。
+// 未登録者＝総応募にいるが、稼働データ(②)に電話番号が無い応募者（=MCG未登録）。電話でユニーク化し、オフィス別に内訳化。
+function computeUnregistered_(parsed, mcgPhoneSet) {
+  let latest = null;
+  parsed.forEach(x => { if (x.d && (!latest || x.d > latest)) latest = x.d; });
+  if (!latest) return { date: null, total: 0, byOffice: [], list: [] };
+  const dayKey = fmtDate_(latest);
+  const seen = {}, byOffice = {}, list = [];
+  parsed.forEach(x => {
+    if (!x.d || fmtDate_(x.d) !== dayKey) return;        // 最新日(前日)のみ
+    if (!x.phone || mcgPhoneSet.has(x.phone)) return;     // 稼働データに電話あり=登録済み
+    if (seen[x.phone]) return; seen[x.phone] = true;      // 電話ユニーク
+    const office = x.office || '(未割当)';
+    byOffice[office] = (byOffice[office] || 0) + 1;
+    list.push({ name: x.name || '', phone: x.phoneRaw || x.phone, office: office, media: x.media || '' });
+  });
+  const byOfficeArr = Object.keys(byOffice).map(o => ({ office: o, count: byOffice[o] })).sort((a, b) => b.count - a.count);
+  list.sort((a, b) => (a.office < b.office ? -1 : a.office > b.office ? 1 : 0));
+  return { date: dayKey, total: list.length, byOffice: byOfficeArr, list: list };
+}
+
 function readLatestCsvMatrix_(folderId, charset) {
   const f = latestCsvFile_(folderId);
   if (!f) { Logger.log('CSV not found in folder ' + folderId); return []; }
@@ -807,12 +858,14 @@ function readLatestCsvMatrix_(folderId, charset) {
 //   ・当月開始者の応募月(yyyy-MM)分布（新規/再応募つき, ④）
 //   ・歩留(③)＝コホート(最後の応募日＋新規/再で判定)×各ステージの当月件数 ＋ A+B参考
 // を集計して acc に書き込む。新規/再応募は「最後の応募日」基準（lastDateByPhone>firstDateByPhone＝再応募）。
-function fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, lastDateByPhone) {
+function fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, lastDateByPhone, mcgPhoneSet) {
   firstDateByPhone = firstDateByPhone || {};
   lastDateByPhone = lastDateByPhone || {};
   const rows = readLatestCsvMatrix_(CONFIG.MCG_FOLDER_ID, CONFIG.CHARSET_MCG);
   let setHit = 0, startHit = 0, minA = null, maxA = null;
   rows.forEach(row => {
+    const phoneAll = normPhone_(row[MCGI.phone]);
+    if (mcgPhoneSet && phoneAll) mcgPhoneSet.add(phoneAll); // 稼働データの全電話（オフィス不問）を登録済み集合へ
     const office = prefToOffice[(row[MCGI.pref] || '').toString().trim()];
     if (!office || !acc[office]) return;
     const phone = normPhone_(row[MCGI.phone]);

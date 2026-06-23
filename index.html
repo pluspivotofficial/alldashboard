@@ -94,6 +94,18 @@
   .totline{fill:none;stroke:var(--navy);stroke-width:1.6}
   .totdot{fill:var(--navy)}
 
+  /* 未登録者アラート */
+  .alert{background:#fff7f5;border:1px solid #f3c5bf;border-left:4px solid var(--coral);border-radius:12px;padding:14px 16px;margin-bottom:16px}
+  .alert-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;cursor:pointer}
+  .alert-head h2{font-size:14px;color:var(--coral)}
+  .alert-head .big{font-size:20px;font-weight:800;color:var(--coral)}
+  .alert-head .date{font-size:12px;color:var(--muted)}
+  .alert-head .tg{margin-left:auto;font-size:12px;color:var(--coral)}
+  .alert-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .alert-chip{background:#fff;border:1px solid #f3c5bf;border-radius:999px;padding:3px 10px;font-size:12px;color:var(--ink)}
+  .alert-chip b{color:var(--coral)}
+  .alert-list{margin-top:12px;border-top:1px dashed #f3c5bf;padding-top:10px}
+  .alert-ok{font-size:13px;color:var(--muted)}
   /* detail */
   .back{background:none;border:none;color:var(--coral);font-weight:700;padding:0;cursor:pointer;margin-bottom:12px}
   .detail-head{display:flex;align-items:baseline;gap:10px;margin-bottom:14px}
@@ -168,6 +180,7 @@
         <option value="2026-05">2026年5月</option>
         <option value="2026-06">2026年6月</option>
       </select>
+      <button id="exportSelBtn" title="人選シートから 人材番号＋人選ｽﾃｰﾀｽ だけのCSVをダウンロード">⬇ 人選CSV出力</button>
       <button class="refresh" id="refreshBtn">更新</button>
     </div>
   </header>
@@ -176,6 +189,7 @@
   <div id="officeSection">
   <!-- 一覧ビュー -->
   <div id="listView">
+    <div id="alertView"></div>
     <div class="kpis" id="kpis"></div>
 
     <div class="panel">
@@ -434,7 +448,34 @@ function officeCells(v,sel){
 function sumOv(list){const ks=["newApplications","reApplications","targetNew","forecast","contacts","setMonth","startedMonth"];const r={};ks.forEach(k=>r[k]=list.reduce((a,o)=>a+(o.overview[k]||0),0));return r;}
 function sumSel(list){const r={A:0,B:0,C:0,other:0,unknown:0};list.forEach(o=>["A","B","C","other","unknown"].forEach(k=>r[k]+=(o.selection[k]||0)));return r;}
 
+/* 前日の未登録者アラート（総応募にあって稼働データに電話が無い人） */
+let unregOpen=false;
+function renderUnregistered(){
+  const el=$("#alertView"); if(!el) return;
+  const u=DATA.unregistered;
+  if(!u || !u.date){ el.innerHTML=""; return; }
+  if(!u.total){
+    el.innerHTML=`<div class="alert"><div class="alert-head"><h2>✅ 前日の未登録者なし</h2><span class="date">${u.date} 時点・前日応募はすべて稼働データに登録済み</span></div></div>`;
+    return;
+  }
+  const chips=(u.byOffice||[]).map(o=>`<span class="alert-chip">${o.office} <b>${num(o.count)}</b></span>`).join("");
+  const rows=(u.list||[]).map(p=>`<tr><td class="l">${p.office||"-"}</td><td>${p.name||"-"}</td><td>${p.phone||"-"}</td><td>${p.media||"-"}</td></tr>`).join("");
+  el.innerHTML=`<div class="alert">
+    <div class="alert-head" id="alertToggle">
+      <h2>⚠️ 前日の未登録者</h2><span class="big">${num(u.total)}名</span>
+      <span class="date">${u.date} 応募／総応募にあり・稼働データ(MCG)に電話なし</span>
+      <span class="tg">${unregOpen?"▲ 閉じる":"▼ 明細を見る"}</span>
+    </div>
+    <div class="alert-chips">${chips}</div>
+    ${unregOpen?`<div class="alert-list scroll"><table>
+      <thead><tr><th class="l">オフィス</th><th>氏名</th><th>電話番号</th><th>媒体</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`:""}
+  </div>`;
+  const t=$("#alertToggle"); if(t) t.addEventListener("click",()=>{ unregOpen=!unregOpen; renderUnregistered(); });
+}
+
 function renderList(){
+  renderUnregistered();
   renderKpis(); renderChart();
   const offices=DATA.offices;
   // エリアでグループ化（割当順は AREA_ORDER、未定義は末尾）
@@ -828,6 +869,10 @@ $("#navOffice").addEventListener("click",()=>switchSection("office"));
 $("#navMedia").addEventListener("click",()=>switchSection("media"));
 $("#navSel").addEventListener("click",()=>switchSection("selection"));
 $("#navAna").addEventListener("click",()=>switchSection("analysis"));
+$("#exportSelBtn").addEventListener("click",()=>{
+  if(!API_URL){ alert("API未設定のため出力できません（モックデータ表示中）"); return; }
+  window.open(`${API_URL}?export=selection`,"_blank");
+});
 selectCurrentMonth();
 refresh();
 </script>
