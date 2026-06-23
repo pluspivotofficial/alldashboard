@@ -307,6 +307,15 @@ function runDailyAggregation(monthArg) {
       mo.overview.contacts += 1;
     }
 
+    // 当月に発生した設定/開始（応募月は問わない）→ 一覧の設定数/開始数 と ④開始の応募月分布
+    if (inRange_(parseDate_(row[MCGI.setNew]), range.monthStart, range.monthEnd)) acc[office].overview.setMonth += 1;
+    if (inRange_(parseDate_(row[MCGI.startNew]), range.monthStart, range.monthEnd)) {
+      acc[office].overview.startedMonth += 1;
+      const ad = parseDate_(row[MCGI.applyDate]);
+      const k = ad ? Utilities.formatDate(ad, CONFIG.TZ, 'yyyy-MM') : '不明';
+      acc[office].startedApply[k] = (acc[office].startedApply[k] || 0) + 1;
+    }
+
     // 人選（当月応募・A/B/C/その他）
     if (inMonth) {
       bumpSelection_(acc[office].selection, letter); bumpSelection_(mo.selection, letter);
@@ -639,10 +648,11 @@ function newOfficeAcc_(office, prefs, target, area) {
     office: office,
     prefectures: prefs,
     area: area || '',
-    overview: { newApplications: 0, phoneApplications: 0, reApplications: 0, targetNew: target, forecast: 0, contacts: 0, newAB: 0, reAB: 0 },
+    overview: { newApplications: 0, phoneApplications: 0, reApplications: 0, targetNew: target, forecast: 0, contacts: 0, newAB: 0, reAB: 0, setMonth: 0, startedMonth: 0 },
     selection: { A: 0, B: 0, C: 0, other: 0, unknown: 0 },
     funnel: { currentMonthNew: fnl(), within2MonthsNew: fnl(), reApplication: fnl() },
     bySelection: { A: { new: 0, re: 0, started: 0 }, B: { new: 0, re: 0, started: 0 }, C: { new: 0, re: 0, started: 0 }, ou: { new: 0, re: 0, started: 0 } },
+    startedApply: {}, // 当月に開始した人の「応募月(yyyy-MM)→件数」分布（④用）
     applicants: [], // A/B/C の応募者明細（条件フラグ付き）
   };
 }

@@ -99,6 +99,15 @@
   .detail-head{display:flex;align-items:baseline;gap:10px;margin-bottom:14px}
   .detail-head h2{font-size:22px;color:var(--navy)}
   .detail-head .pref{font-size:12px;color:var(--muted)}
+  /* 開始の応募月分布（横棒） */
+  .ba-wrap{padding:12px 16px;display:flex;flex-direction:column;gap:8px}
+  .ba-row{display:flex;align-items:center;gap:10px}
+  .ba-l{width:62px;font-size:12px;color:var(--muted);text-align:right;flex:none}
+  .ba-l.cur{color:var(--navy);font-weight:700}
+  .ba-track{flex:1;background:#eef2f7;border-radius:6px;height:18px;overflow:hidden}
+  .ba-fill{height:100%;background:#93c5fd;border-radius:6px;min-width:2px}
+  .ba-fill.cur{background:var(--navy)}
+  .ba-n{width:50px;font-size:12px;font-weight:700;color:var(--ink);text-align:left;flex:none}
   .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;padding:14px 16px}
   .stat{border:1px solid var(--line);border-radius:10px;padding:11px 13px}
   .stat .s-l{font-size:11px;color:var(--muted)}
@@ -419,9 +428,9 @@ function officeCells(v,sel){
     `<td>${meter(rate)}</td>`+
     `<td><span class="pill ${v.forecast>=v.targetNew?'up':'down'}">${num(v.forecast)}</span></td>`+
     `<td>${num(sel.A||0)}</td><td>${num(sel.B||0)}</td><td class="refcol">${num((sel.A||0)+(sel.B||0))}</td><td>${num(sel.C||0)}</td><td>${num(ou)}</td>`+
-    `<td>${num(v.contacts)}</td>`;
+    `<td>${num(v.contacts)}</td><td>${num(v.setMonth||0)}</td><td>${num(v.startedMonth||0)}</td>`;
 }
-function sumOv(list){const ks=["newApplications","reApplications","targetNew","forecast","contacts"];const r={};ks.forEach(k=>r[k]=list.reduce((a,o)=>a+(o.overview[k]||0),0));return r;}
+function sumOv(list){const ks=["newApplications","reApplications","targetNew","forecast","contacts","setMonth","startedMonth"];const r={};ks.forEach(k=>r[k]=list.reduce((a,o)=>a+(o.overview[k]||0),0));return r;}
 function sumSel(list){const r={A:0,B:0,C:0,other:0,unknown:0};list.forEach(o=>["A","B","C","other","unknown"].forEach(k=>r[k]+=(o.selection[k]||0)));return r;}
 
 function renderList(){
@@ -438,7 +447,7 @@ function renderList(){
     if(multiArea) body+=`<tr class="subtotal"><td class="l">小計：${area}</td>${officeCells(sumOv(list),sumSel(list))}</tr>`;
   });
   $("#listTable").innerHTML=`<table>
-    <thead><tr><th class="l">オフィス</th><th>新規応募</th><th>再応募</th><th>目標(新規)</th><th>達成率</th><th>着地見込み</th><th>A人選</th><th>B人選</th><th class="ref">A+B人選</th><th>C人選</th><th>その他+不明</th><th>接触数</th></tr></thead>
+    <thead><tr><th class="l">オフィス</th><th>新規応募</th><th>再応募</th><th>目標(新規)</th><th>達成率</th><th>着地見込み</th><th>A人選</th><th>B人選</th><th class="ref">A+B人選</th><th>C人選</th><th>その他+不明</th><th>接触数</th><th>設定数</th><th>開始数</th></tr></thead>
     <tbody>${body}</tbody>
     <tfoot><tr><td class="l">合計</td>${officeCells(sumOv(offices),sumSel(offices))}</tr></tfoot>
   </table>`;
@@ -480,13 +489,16 @@ function showDetail(i){
       <tbody>${frows}</tbody>
     </table></div></div>`;
 
+  // ④ 開始の内訳（当月に開始した人の応募月分布）
+  const started=startedApplyPanel(o);
+
   $("#detailView").innerHTML=`
     <button class="back" id="backBtn">← オフィス一覧に戻る</button>
     <div class="detail-head">
       <h2>${o.office}</h2>
       <span style="margin-left:auto;display:flex;gap:6px"><button id="prevO">‹ 前</button><button id="nextO">次 ›</button></span>
     </div>
-    ${summary}${selection}${funnel}`;
+    ${summary}${selection}${funnel}${started}`;
   $("#listView").classList.add("hidden");
   $("#detailView").classList.remove("hidden");
   $("#backBtn").addEventListener("click",showList);
@@ -496,6 +508,25 @@ function showDetail(i){
 }
 
 function showList(){ $("#detailView").classList.add("hidden"); $("#listView").classList.remove("hidden"); }
+
+/* ④ 当月に開始した人を、その人の「応募月」別に横棒で表示 */
+function startedApplyPanel(o){
+  const sa=o.startedApply||{};
+  const keys=Object.keys(sa);
+  const total=(o.overview&&o.overview.startedMonth)||keys.reduce((a,k)=>a+sa[k],0);
+  const head=`<div class="panel-head"><h2>④ 開始の内訳（応募月の分布）</h2><span class="hint">当月（${DATA.month}）に開始した ${num(total)}名を、応募した月で集計</span></div>`;
+  if(!keys.length) return `<div class="panel">${head}<div style="padding:16px;color:var(--muted)">当月に開始した応募者はいません。</div></div>`;
+  const ord=keys.filter(k=>k!=="不明").sort(); if(sa["不明"]!=null) ord.push("不明");
+  const max=Math.max.apply(null,ord.map(k=>sa[k]));
+  const mlabel=k=>{ if(k==="不明") return "不明"; const p=k.split("-"); return `${p[0]}/${+p[1]}`; };
+  const rows=ord.map(k=>{
+    const v=sa[k], w=max?Math.round(v/max*100):0, cur=(k===DATA.month);
+    return `<div class="ba-row"><div class="ba-l${cur?' cur':''}">${mlabel(k)}</div><div class="ba-track"><div class="ba-fill${cur?' cur':''}" style="width:${Math.max(w,v?2:0)}%"></div></div><div class="ba-n">${num(v)}名</div></div>`;
+  }).join("");
+  return `<div class="panel">${head}
+    <div class="legend"><span>横軸＝人数</span><span>当月（${DATA.month}）応募分は濃色</span><span>＝就業開始日が当月にある人を、応募日の月で分類</span></div>
+    <div class="ba-wrap">${rows}</div></div>`;
+}
 
 /* 月セレクタの既定を当月に。該当オプションが無ければ最後（最新月）を選ぶ。 */
 function selectCurrentMonth(){
