@@ -825,16 +825,13 @@ function latestCsvFile_(folderId) {
 }
 
 // 最新CSVを「データ行の配列(行=配列)」で返す（重複ヘッダーがある⑤用。ヘッダー行は除外）
-// 前日(=総応募の最新応募日)の未登録者を割り出す。
+// 前日(=今日−1)の未登録者を割り出す。
 // 未登録者＝総応募にいるが、稼働データ(②)に電話番号が無い応募者（=MCG未登録）。電話でユニーク化し、オフィス別に内訳化。
 function computeUnregistered_(parsed, mcgPhoneSet) {
-  let latest = null;
-  parsed.forEach(x => { if (x.d && (!latest || x.d > latest)) latest = x.d; });
-  if (!latest) return { date: null, total: 0, byOffice: [], list: [] };
-  const dayKey = fmtDate_(latest);
+  const dayKey = fmtDate_(new Date(Date.now() - 86400000)); // 今日(TZ)から1日前＝昨日
   const seen = {}, byOffice = {}, list = [];
   parsed.forEach(x => {
-    if (!x.d || fmtDate_(x.d) !== dayKey) return;        // 最新日(前日)のみ
+    if (!x.d || fmtDate_(x.d) !== dayKey) return;        // 昨日(今日−1)の応募のみ
     if (!x.phone || mcgPhoneSet.has(x.phone)) return;     // 稼働データに電話あり=登録済み
     if (seen[x.phone]) return; seen[x.phone] = true;      // 電話ユニーク
     const office = x.office || '(未割当)';
