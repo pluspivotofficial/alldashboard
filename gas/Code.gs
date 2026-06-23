@@ -191,6 +191,7 @@ function runDailyAggregation(monthArg) {
 
   const totalPhoneSet = {};      // 総応募に存在する電話（電話応募判定用）
   const firstDateByPhone = {};   // 電話 → 初回応募日（累積シートでの重複判定）
+  const lastDateByPhone = {};    // 電話 → 最終応募日（新規/再の判定は「最後の応募」基準）
   const judgeByPhone = {};       // 電話 → 'A'|'B'|'C'|'other'（⑤を4条件で判定）
   const dailyMap = {};
   const mediaDailyMap = {};       // media -> date -> {new, re, ab}
@@ -237,6 +238,7 @@ function runDailyAggregation(monthArg) {
       totalPhoneSet[x.phone] = true;
       x.first = !firstDateByPhone[x.phone];          // この電話の初回行か（=新規 / 以降=再応募）
       if (x.first) firstDateByPhone[x.phone] = x.d;
+      lastDateByPhone[x.phone] = x.d;                // 昇順走査なので最終的に最終応募日が残る
     } else { x.first = true; }
   });
 
@@ -359,7 +361,7 @@ function runDailyAggregation(monthArg) {
 
   // 設定数/開始数・④開始の応募月分布(新規/再応募)・オフィス別の歩留(③)は「稼働データ(全期間)」基準で集計。
   // 当月人選シートは当月応募しか載らないため、前月以前に応募して当月に設定/開始した人を取りこぼす。
-  try { fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, rePhoneInMonth); }
+  try { fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, lastDateByPhone); }
   catch (e) { Logger.log('activity-from-history skipped: ' + e); }
 
   // --- 仕上げ ---
@@ -803,11 +805,11 @@ function readLatestCsvMatrix_(folderId, charset) {
 // 稼働データ(MCGフォルダ・全期間)から、各オフィスの
 //   ・当月に設定/開始した件数（一覧の設定数/開始数）
 //   ・当月開始者の応募月(yyyy-MM)分布（新規/再応募つき, ④）
-//   ・歩留(③)＝コホート(初回応募日で判定)×各ステージの当月件数 ＋ A+B参考
-// を集計して acc に書き込む。新規/再応募の判定は総応募由来の firstDateByPhone を使う。
-function fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, rePhoneInMonth) {
+//   ・歩留(③)＝コホート(最後の応募日＋新規/再で判定)×各ステージの当月件数 ＋ A+B参考
+// を集計して acc に書き込む。新規/再応募は「最後の応募日」基準（lastDateByPhone>firstDateByPhone＝再応募）。
+function fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, lastDateByPhone) {
   firstDateByPhone = firstDateByPhone || {};
-  rePhoneInMonth = rePhoneInMonth || {};
+  lastDateByPhone = lastDateByPhone || {};
   const rows = readLatestCsvMatrix_(CONFIG.MCG_FOLDER_ID, CONFIG.CHARSET_MCG);
   let setHit = 0, startHit = 0, minA = null, maxA = null;
   rows.forEach(row => {
@@ -819,27 +821,28 @@ function fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, re
     const letter = judgeFromRow_(row);
     const ab = letter === 'A' || letter === 'B';
     const fd = firstDateByPhone[phone];
-    const isRe = !!(fd && ad && ad.getTime() > fd.getTime()); // 総応募の初回より後の応募＝再応募
+    const ld = lastDateByPhone[phone] || ad; // 最後の応募日（総応募基準・無ければ稼働行の応募日）
+    const isRe = !!(fd && ld && ld.getTime() > fd.getTime()); // 最後の応募が初回より後＝再応募
 
-    // 一覧の設定数/開始数 と ④開始の応募月分布（新規/再応募つき）
+    // 一覧の設定数/開始数 と ④開始の応募月分布（最後の応募月でバケット・新規/再は最後の応募基準）
     if (inRange_(parseDate_(row[MCGI.setNew]), range.monthStart, range.monthEnd)) { acc[office].overview.setMonth += 1; setHit += 1; }
     if (inRange_(parseDate_(row[MCGI.startNew]), range.monthStart, range.monthEnd)) {
       acc[office].overview.startedMonth += 1; startHit += 1;
-      const k = ad ? Utilities.formatDate(ad, CONFIG.TZ, 'yyyy-MM') : '不明';
+      const k = ld ? Utilities.formatDate(ld, CONFIG.TZ, 'yyyy-MM') : '不明';
       const b = acc[office].startedApply[k] || (acc[office].startedApply[k] = { total: 0, new: 0, re: 0 });
       b.total += 1; if (isRe) b.re += 1; else b.new += 1;
     }
 
-    // 歩留(③・オフィス別): ④と同じ「応募行ベース」でコホート判定（その応募が新規か再応募か＝ad vs fd）。
-    //   ・新規(ad==fd)で応募月が当月 → 当月内応募・新規／2ヶ月以内 → 2ヶ月以内応募・新規
-    //   ・再応募(ad>fd)で応募月が当月 → 再応募
+    // 歩留(③・オフィス別): ④と同じ「最後の応募日＋新規/再」基準でコホート判定。
+    //   ・新規(最後の応募が初回)で最後の応募月が当月 → 当月内応募・新規／2ヶ月以内 → 2ヶ月以内応募・新規
+    //   ・再応募(最後の応募が初回より後)で最後の応募月が当月 → 再応募
     // これにより ④の各月 新規/再 と ③の各コホートが一致する。
     const cohorts = [];
-    if (ad) {
+    if (ld) {
       if (!isRe) {
-        if (inRange_(ad, range.monthStart, range.monthEnd)) cohorts.push('currentMonthNew');
-        if (inRange_(ad, range.twoMonthStart, range.monthEnd)) cohorts.push('within2MonthsNew');
-      } else if (inRange_(ad, range.monthStart, range.monthEnd)) {
+        if (inRange_(ld, range.monthStart, range.monthEnd)) cohorts.push('currentMonthNew');
+        if (inRange_(ld, range.twoMonthStart, range.monthEnd)) cohorts.push('within2MonthsNew');
+      } else if (inRange_(ld, range.monthStart, range.monthEnd)) {
         cohorts.push('reApplication');
       }
     }
