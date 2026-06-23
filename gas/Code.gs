@@ -900,7 +900,10 @@ function parseDate_(v) {
 function fmtDate_(d) { return d ? Utilities.formatDate(d, CONFIG.TZ, 'yyyy-MM-dd') : ''; }
 function inRange_(d, a, b) { return !!d && d >= a && d <= b; }
 function notEmpty_(v) { return v !== null && v !== undefined && v.toString().trim() !== ''; }
-function normPhone_(v) { return (v || '').toString().replace(/[^0-9]/g, ''); }
+// 電話を突合キーに正規化。数字以外を除去し、さらに先頭0を落として桁を揃える。
+// （総応募/人選シートはGoogle Sheetsが数値化して先頭0が落ちた10桁、稼働データCSVは先頭0が残った11桁になり、
+//   揃えないと firstDateByPhone との照合が全滅して歩留③や新規/再判定が壊れるため）
+function normPhone_(v) { return (v || '').toString().replace(/[^0-9]/g, '').replace(/^0+/, ''); }
 
 /* =========================================================================
  * 総応募シートへの追記（応募ツールのCSVを末尾へ追加）
