@@ -110,7 +110,7 @@ function doGet(e) {
     return ContentService.createTextOutput(a).setMimeType(ContentService.MimeType.JSON);
   }
   if (e && e.parameter && e.parameter.export === 'selection') { // 人選CSV出力（人材番号＋人選ｽﾃｰﾀｽ）
-    const fname = '人選ｽﾃｰﾀｽ_' + Utilities.formatDate(new Date(), CONFIG.TZ, 'yyyyMMdd') + '.csv';
+    const fname = 'senbatsu_status_' + Utilities.formatDate(new Date(), CONFIG.TZ, 'yyyyMMdd') + '.csv';
     return ContentService.createTextOutput(buildSelectionCsv_())
       .setMimeType(ContentService.MimeType.CSV).downloadAsFile(fname);
   }
