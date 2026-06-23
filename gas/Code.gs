@@ -830,13 +830,19 @@ function fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, re
       b.total += 1; if (isRe) b.re += 1; else b.new += 1;
     }
 
-    // 歩留(③・オフィス別): コホート × 各ステージ「日付列が当月のもの」
+    // 歩留(③・オフィス別): ④と同じ「応募行ベース」でコホート判定（その応募が新規か再応募か＝ad vs fd）。
+    //   ・新規(ad==fd)で応募月が当月 → 当月内応募・新規／2ヶ月以内 → 2ヶ月以内応募・新規
+    //   ・再応募(ad>fd)で応募月が当月 → 再応募
+    // これにより ④の各月 新規/再 と ③の各コホートが一致する。
     const cohorts = [];
-    if (fd) {
-      if (inRange_(fd, range.monthStart, range.monthEnd)) cohorts.push('currentMonthNew');
-      if (inRange_(fd, range.twoMonthStart, range.monthEnd)) cohorts.push('within2MonthsNew');
+    if (ad) {
+      if (!isRe) {
+        if (inRange_(ad, range.monthStart, range.monthEnd)) cohorts.push('currentMonthNew');
+        if (inRange_(ad, range.twoMonthStart, range.monthEnd)) cohorts.push('within2MonthsNew');
+      } else if (inRange_(ad, range.monthStart, range.monthEnd)) {
+        cohorts.push('reApplication');
+      }
     }
-    if (rePhoneInMonth[phone]) cohorts.push('reApplication');
     cohorts.forEach(c => {
       const f = acc[office].funnel[c];
       FUNNEL_STAGES.forEach(([outKey, idxKey]) => {
