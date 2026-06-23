@@ -23,6 +23,15 @@
   .status { font-size: 13px; color: #374151; margin-top: 12px; min-height: 20px; }
   .muted { font-size: 12px; color: #6b7280; line-height: 1.7; }
   code { background: #eef2ff; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .result { margin-top: 12px; border: 1px solid #e5e7eb; border-radius: 10px; overflow: hidden; }
+  .result h3 { font-size: 13px; font-weight: 700; color: #1A2855; background: #f8fafc; padding: 9px 14px; border-bottom: 1px solid #e5e7eb; }
+  .gline { display: flex; align-items: baseline; gap: 8px; padding: 9px 14px; border-bottom: 1px solid #f1f5f9; }
+  .gline:last-child { border-bottom: none; }
+  .gline .g { width: 64px; font-weight: 700; }
+  .gline .gA { color: #b45309; } .gline .gB { color: #1d4ed8; } .gline .gC { color: #0f766e; } .gline .gO { color: #6b7280; }
+  .gline .n { font-size: 17px; font-weight: 800; color: #111827; }
+  .gline .add { font-size: 12px; color: #16a34a; font-weight: 700; }
+  .gline .add.zero { color: #9ca3af; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -99,7 +108,9 @@ async function upload() {
     });
     const j = await res.json();
     if (j.ok) {
-      $('status').textContent = `✅ 人選シートを更新しました（${j.rows}件${j.month ? '・集計 ' + j.month : ''}）。ダッシュボードに反映されます。`;
+      $('status').innerHTML =
+        `<div>✅ 人選シートを更新しました（${j.rows}件${j.month ? '・集計 ' + j.month : ''}）。ダッシュボードに反映されます。</div>`
+        + renderTally(j.tally);
     } else {
       $('status').textContent = '⚠️ 失敗: ' + (j.error || 'unknown');
     }
@@ -108,6 +119,19 @@ async function upload() {
   } finally {
     $('send').disabled = false;
   }
+}
+
+// 1次判定の内訳カードを描画
+function renderTally(t) {
+  if (!t) return '';
+  const line = (cls, label, o) => {
+    o = o || { total: 0, added: 0 };
+    const add = `<span class="add${o.added ? '' : ' zero'}">（追加 ${o.added}名）</span>`;
+    return `<div class="gline"><span class="g ${cls}">${label}</span><span class="n">${o.total}名</span>${add}</div>`;
+  };
+  return `<div class="result"><h3>🧭 1次判定の結果</h3>`
+    + line('gA', 'A人選', t.A) + line('gB', 'B人選', t.B) + line('gC', 'C人選', t.C) + line('gO', 'その他', t.other)
+    + `</div>`;
 }
 
 $('file').addEventListener('change', e => handleFile(e.target.files[0]));

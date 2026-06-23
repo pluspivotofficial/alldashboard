@@ -129,10 +129,10 @@ function doPost(e) {
 
     // type=senbatsu … 人選データCSV。1NsC65W形式へ整形＋人選ｽﾃｰﾀｽを4条件で算出し、当月人選シートを丸ごと置き換える。
     if (p.type === 'senbatsu') {
-      const rows = writeSenbatsuSheet_(csv);
+      const result = writeSenbatsuSheet_(csv);
       let summary = null;
       try { summary = runDailyAggregation(); } catch (err) { Logger.log('post-aggregate failed: ' + err); }
-      return jsonOut_({ ok: true, mode: 'senbatsu', rows: rows, month: summary && summary.month });
+      return jsonOut_({ ok: true, mode: 'senbatsu', rows: result.rows, tally: result.tally, month: summary && summary.month });
     }
 
     // 既定 … 総応募CSV。TOTAL_FOLDER_IDへ保存→追記＆当月集計。
@@ -597,24 +597,37 @@ function readSenbatsuRows_() {
 }
 
 // 人選CSV本文を 1NsC65W形式（先頭28列＋人選ｽﾃｰﾀｽ）へ整形し、人選ｽﾃｰﾀｽを4条件で算出して丸ごと置き換える。
+// 戻り値 { rows, tally } … tally=1次判定の内訳 {A,B,C,other:{total,added}}。added=前回取り込みに無かった電話番号の件数。
 function writeSenbatsuSheet_(csvText) {
   const SENBATSU_HEADER = ['応募日', '氏名', 'フリガナ', '電話番号', '年齢', '性別', '都道府県', '住所', '応募媒体', '接触ステータス', '登録日', '登録ステータス', '案件番号', '応募日', '人材番号', '所属', '自社人材担当者', '福祉資格', '福祉資格', '介護経験', '★新規就業ステータス', '★新規就業ステータス', '勤務日数', '勤務日数', '設定日（新規）', '実施日（新規）', '決定日（新規）', '開始日（新規）', '人選ｽﾃｰﾀｽ'];
   const W = SENBATSU_HEADER.length; // 29
+  const sh = SpreadsheetApp.openById(CONFIG.SENBATSU_SHEET_ID).getSheets()[0];
+
+  // 取り込み前の電話集合（「追加」=今回新しく増えた電話番号の判定用）
+  const prevPhones = new Set();
+  const prev = sh.getDataRange().getValues();
+  for (let i = 1; i < prev.length; i++) { const ph = normPhone_(prev[i][3]); if (ph) prevPhones.add(ph); }
+
   const data = Utilities.parseCsv((csvText || '').replace(/^﻿/, ''));
   const out = [SENBATSU_HEADER];
+  const tally = { A: { total: 0, added: 0 }, B: { total: 0, added: 0 }, C: { total: 0, added: 0 }, other: { total: 0, added: 0 } };
   for (let i = 1; i < data.length; i++) {
     const r = data[i];
     if (!r || !r.some(c => (c || '').toString().trim())) continue;
     const row = [];
     for (let k = 0; k < 28; k++) row.push(r[k] != null ? r[k] : ''); // 先頭28列をそのまま
-    row.push(senbatsuLabel_(judgeFromRow_(r)));                       // 人選ｽﾃｰﾀｽ=4条件で算出
+    const letter = judgeFromRow_(r);                                 // 1次判定（4条件）
+    row.push(senbatsuLabel_(letter));                                // 人選ｽﾃｰﾀｽ
     out.push(row);
+    const key = (letter === 'A' || letter === 'B' || letter === 'C') ? letter : 'other';
+    tally[key].total += 1;
+    const ph = normPhone_(r[3]);
+    if (!ph || !prevPhones.has(ph)) tally[key].added += 1;          // 前回に無い＝追加
   }
-  const sh = SpreadsheetApp.openById(CONFIG.SENBATSU_SHEET_ID).getSheets()[0];
   sh.clearContents();
   sh.getRange(1, 1, out.length, W).setValues(out);
-  Logger.log('人選シート置換: %s 行', out.length - 1);
-  return out.length - 1;
+  Logger.log('人選シート置換: %s 行 (A%s/B%s/C%s/他%s)', out.length - 1, tally.A.total, tally.B.total, tally.C.total, tally.other.total);
+  return { rows: out.length - 1, tally: tally };
 }
 
 /* =========================================================================
