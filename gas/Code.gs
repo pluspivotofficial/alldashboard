@@ -259,14 +259,12 @@ function runDailyAggregation(monthArg) {
   parsed.forEach(x => {
     if (!x.office || !acc[x.office] || !inRange_(x.d, range.monthStart, range.monthEnd)) return;
     const key = fmtDate_(x.d);
-    dailyMap[key] = dailyMap[key] || { new: 0, re: 0, ab: 0 };
     const mo = macc_(x.media, x.office);
     if (x.first) {                                    // 初回=新規（電話ユニーク）
       acc[x.office].overview.newApplications += 1;
       mo.overview.newApplications += 1;
-      dailyMap[key].new += 1;
       md_(x.media, key).new += 1;
-      if (isAB(x.phone)) { acc[x.office].overview.newAB += 1; mo.overview.newAB += 1; dailyMap[key].ab += 1; md_(x.media, key).ab += 1; }
+      if (isAB(x.phone)) { acc[x.office].overview.newAB += 1; mo.overview.newAB += 1; md_(x.media, key).ab += 1; }
     } else {                                          // 2回目以降=再応募（電話ユニーク）
       const set = reUniqByOffice[x.office] || (reUniqByOffice[x.office] = new Set());
       const firstReInOffice = !set.has(x.phone);      // このオフィスでこの電話の初回再応募か
@@ -276,7 +274,7 @@ function runDailyAggregation(monthArg) {
         (mm[x.office] || (mm[x.office] = new Set())).add(x.phone);
       }
       rePhoneInMonth[x.phone] = true;                 // 当月の再応募者
-      if (!reDailySeen[x.phone]) { reDailySeen[x.phone] = true; dailyMap[key].re += 1; md_(x.media, key).re += 1; } // 日次もユニーク
+      if (!reDailySeen[x.phone]) { reDailySeen[x.phone] = true; md_(x.media, key).re += 1; } // 媒体日次はユニーク
     }
   });
   Object.keys(reUniqByOffice).forEach(o => {
@@ -291,6 +289,15 @@ function runDailyAggregation(monthArg) {
       mo.overview.reApplications = set.size;
       set.forEach(p => { if (isAB(p)) mo.overview.reAB += 1; });
     });
+  });
+
+  // 日次グラフ(総応募)＝行数ベース。重複ユニーク化せず、オフィス未割当行も含めて当日の実件数を数える。
+  // 新規=電話初出の行 / 再応募=2回目以降の行。電話応募は後段(⑤)で日別に加算する。
+  parsed.forEach(x => {
+    if (!inRange_(x.d, range.monthStart, range.monthEnd)) return;
+    const dm = dailyMap[fmtDate_(x.d)] || (dailyMap[fmtDate_(x.d)] = { new: 0, re: 0, phone: 0, ab: 0 });
+    if (x.first) { dm.new += 1; if (isAB(x.phone)) dm.ab += 1; }
+    else dm.re += 1;
   });
 
   // --- ⑤ MCG人選: 電話応募・接触数・歩留・人選（列はインデックス参照） ---
@@ -317,6 +324,8 @@ function runDailyAggregation(monthArg) {
         mo.overview.newApplications += 1;
         if (ab) { acc[office].overview.newAB += 1; mo.overview.newAB += 1; }
         firstDateByPhone[phone] = d; // 歩留でも当月の新規扱い
+        const dm = dailyMap[fmtDate_(d)] || (dailyMap[fmtDate_(d)] = { new: 0, re: 0, phone: 0, ab: 0 }); // 日次グラフに電話応募を加算
+        dm.phone += 1; if (ab) dm.ab += 1;
       }
     }
 
@@ -420,9 +429,11 @@ function runDailyAggregation(monthArg) {
     return { media: media, overview: tot.overview, selection: tot.selection, funnel: tot.funnel, offices: offices, daily: mediaDailyOut(media) };
   }).filter(m => m.offices.length > 0).sort((a, b) => b.overview.newApplications - a.overview.newApplications);
 
-  const daily = Object.keys(dailyMap).sort().map(k => ({
-    date: k, new: dailyMap[k].new, re: dailyMap[k].re, total: dailyMap[k].new + dailyMap[k].re, ab: dailyMap[k].ab,
-  }));
+  const daily = Object.keys(dailyMap).sort().map(k => {
+    const v = dailyMap[k];
+    const phone = v.phone || 0;
+    return { date: k, new: v.new, re: v.re, phone: phone, total: v.new + v.re + phone, ab: v.ab };
+  });
 
   const summary = {
     generatedAt: new Date().toISOString(),

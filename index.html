@@ -357,10 +357,10 @@ function renderDailyChart(elId,daily,mode,month){
   const el=$("#"+elId); if(!el) return;
   const {days,dim,elapsed}=monthAxis(month);
   const by={}; (daily||[]).forEach(d=>by[d.date]=d);
-  const get=date=>by[date]||{new:0,re:0,total:0,ab:0};
+  const get=date=>by[date]||{new:0,re:0,phone:0,total:0,ab:0};
   let aLen=0; days.forEach((d,i)=>{ if(by[d.date]) aLen=i+1; }); if(!aLen) aLen=Math.min(elapsed,days.length); // 実データのある最終日まで（残りは予測）
   const {W,H,padL,padR,padT,padB}=CHART, n=days.length, plotW=W-padL-padR, plotH=H-padT-padB;
-  const barSpec = mode==="ab" ? [{key:"ab",color:"var(--gold)"}] : [{key:"new",color:"var(--coral)"},{key:"re",color:"var(--reblue)"}];
+  const barSpec = mode==="ab" ? [{key:"ab",color:"var(--gold)"}] : [{key:"new",color:"var(--coral)"},{key:"re",color:"var(--reblue)"},{key:"phone",color:"#14b8a6"}];
   const lineSpec = mode==="ab" ? [{key:"ab",color:"var(--gold)",fc:true}]
                  : mode==="both" ? [{key:"total",color:"var(--navy)",fc:true},{key:"ab",color:"var(--gold)",fc:false}]
                  : [{key:"total",color:"var(--navy)",fc:true}];
@@ -393,7 +393,7 @@ function renderDailyChart(elId,daily,mode,month){
     <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" id="${elId}-svg">${gridLines(maxV,y)}${bars}${lines}${dots}${xlab}</svg>`;
   attachTip(elId,cx,y,W,H,padL,plotW,n,days,i=>{
     const r=get(days[i].date),proj=i>=aLen,md=days[i].date.slice(5);
-    let h=mode==="ab"?`${md}　A+B人選 <b>${r.ab}</b>`:`${md}　新規 <b>${r.new}</b>・再 <b>${r.re}</b>・計 <b>${r.total}</b>`+(mode==="both"?`・A+B <b>${r.ab}</b>`:"");
+    let h=mode==="ab"?`${md}　A+B人選 <b>${r.ab}</b>`:`${md}　新規 <b>${r.new}</b>・再 <b>${r.re}</b>・電話 <b>${r.phone||0}</b>・計 <b>${r.total}</b>`+(mode==="both"?`・A+B <b>${r.ab}</b>`:"");
     if(proj) h+=`<br><span style="opacity:.75">予測ペース ${Math.round(avg)}/日</span>`;
     return h;
   });
@@ -430,7 +430,7 @@ function renderChart(){
   const sel=$("#officeChartMode"), mode=sel?sel.value:"total";
   $("#officeLegend").innerHTML = mode==="ab"
     ? `<span><span class="sw" style="background:var(--gold)"></span>A+B人選（新規）</span><span><span class="sw" style="background:var(--gold)"></span>着地予測（点線）</span>`
-    : `<span><span class="sw" style="background:var(--coral)"></span>新規応募</span><span><span class="sw" style="background:var(--reblue)"></span>再応募</span><span><span class="sw" style="background:var(--navy)"></span>総応募</span><span><span class="sw" style="background:var(--gold)"></span>着地予測（点線）</span>`;
+    : `<span><span class="sw" style="background:var(--coral)"></span>新規応募</span><span><span class="sw" style="background:var(--reblue)"></span>再応募</span><span><span class="sw" style="background:#14b8a6"></span>電話応募</span><span><span class="sw" style="background:var(--navy)"></span>総応募</span><span><span class="sw" style="background:var(--gold)"></span>着地予測（点線）</span>`;
   renderDailyChart("chart",DATA.daily,mode,DATA.month);
 }
 
