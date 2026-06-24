@@ -265,30 +265,13 @@ function runDailyAggregation(monthArg) {
       mo.overview.newApplications += 1;
       md_(x.media, key).new += 1;
       if (isAB(x.phone)) { acc[x.office].overview.newAB += 1; mo.overview.newAB += 1; md_(x.media, key).ab += 1; }
-    } else {                                          // 2回目以降=再応募（電話ユニーク）
-      const set = reUniqByOffice[x.office] || (reUniqByOffice[x.office] = new Set());
-      const firstReInOffice = !set.has(x.phone);      // このオフィスでこの電話の初回再応募か
-      set.add(x.phone);
-      if (firstReInOffice) {                          // 初回再応募の媒体に1回だけ計上（オフィス合計と一致させる）
-        const mm = reUniqMediaOffice[x.media] || (reUniqMediaOffice[x.media] = {});
-        (mm[x.office] || (mm[x.office] = new Set())).add(x.phone);
-      }
-      rePhoneInMonth[x.phone] = true;                 // 当月の再応募者
-      if (!reDailySeen[x.phone]) { reDailySeen[x.phone] = true; md_(x.media, key).re += 1; } // 媒体日次はユニーク
+    } else {                                          // 2回目以降=再応募（応募ごとに生カウント・月内ユニーク化しない＝シートの新規/再応募列と一致）
+      acc[x.office].overview.reApplications += 1;
+      mo.overview.reApplications += 1;
+      if (isAB(x.phone)) { acc[x.office].overview.reAB += 1; mo.overview.reAB += 1; }
+      rePhoneInMonth[x.phone] = true;                 // 当月の再応募者（歩留の再応募コホート等で使用）
+      md_(x.media, key).re += 1;                      // 媒体日次も生カウント
     }
-  });
-  Object.keys(reUniqByOffice).forEach(o => {
-    const set = reUniqByOffice[o];
-    acc[o].overview.reApplications = set.size;
-    set.forEach(p => { if (isAB(p)) acc[o].overview.reAB += 1; }); // 再応募A+B（電話ユニーク）
-  });
-  Object.keys(reUniqMediaOffice).forEach(media => {
-    Object.keys(reUniqMediaOffice[media]).forEach(office => {
-      const set = reUniqMediaOffice[media][office];
-      const mo = macc_(media, office);
-      mo.overview.reApplications = set.size;
-      set.forEach(p => { if (isAB(p)) mo.overview.reAB += 1; });
-    });
   });
 
   // 日次グラフ(総応募)＝行数ベース。重複ユニーク化せず、オフィス未割当行も含めて当日の実件数を数える。
