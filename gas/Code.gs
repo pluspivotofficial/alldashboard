@@ -265,12 +265,17 @@ function runDailyAggregation(monthArg) {
       mo.overview.newApplications += 1;
       md_(x.media, key).new += 1;
       if (isAB(x.phone)) { acc[x.office].overview.newAB += 1; mo.overview.newAB += 1; md_(x.media, key).ab += 1; }
-    } else {                                          // 2回目以降=再応募（応募ごとに生カウント・月内ユニーク化しない＝シートの新規/再応募列と一致）
+    } else {                                          // 2回目以降=再応募（件数は応募ごとに生カウント・月内ユニーク化しない）
       acc[x.office].overview.reApplications += 1;
       mo.overview.reApplications += 1;
-      if (isAB(x.phone)) { acc[x.office].overview.reAB += 1; mo.overview.reAB += 1; }
       rePhoneInMonth[x.phone] = true;                 // 当月の再応募者（歩留の再応募コホート等で使用）
       md_(x.media, key).re += 1;                      // 媒体日次も生カウント
+      // A+B人選は人単位（ユニーク）。オフィスで初回の再応募時に1回だけ、その媒体に計上する。
+      const set = reUniqByOffice[x.office] || (reUniqByOffice[x.office] = new Set());
+      if (!set.has(x.phone)) {
+        set.add(x.phone);
+        if (isAB(x.phone)) { acc[x.office].overview.reAB += 1; mo.overview.reAB += 1; }
+      }
     }
   });
 
@@ -740,6 +745,7 @@ function newOfficeAcc_(office, prefs, target, area) {
     funnel: { currentMonthNew: fnl(), within2MonthsNew: fnl(), reApplication: fnl() },
     bySelection: { A: { new: 0, re: 0, started: 0 }, B: { new: 0, re: 0, started: 0 }, C: { new: 0, re: 0, started: 0 }, ou: { new: 0, re: 0, started: 0 } },
     startedApply: {}, // 当月に開始した人の「応募月(yyyy-MM)→件数」分布（④用）
+    startedList: [],  // 当月に開始した稼働者の名簿（④下部の一覧用）
     report1: { junNew: 0, re: 0 },                       // ①当月応募 純新規/再応募（電話ユニーク）
     report2: { curNew: 0, prevNew: 0, re: 0, db: 0 },    // ②開始の内訳（当月内純新規/前月純新規/前月当月再応募/その他DB）
     applicants: [], // A/B/C の応募者明細（条件フラグ付き）
@@ -946,6 +952,13 @@ function fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, la
       else if (!isRe && k === prevKey) r2.prevNew += 1;
       else if (isRe && (k === curKey || k === prevKey)) r2.re += 1;
       else r2.db += 1;
+      // ④下部の名簿（当月に開始した稼働者）
+      acc[office].startedList.push({
+        name: (row[1] || '').toString().trim(),
+        applyDate: ld ? fmtDate_(ld) : (ad ? fmtDate_(ad) : ''),
+        startDate: fmtDate_(parseDate_(row[MCGI.startNew])),
+        grade: letter, newRe: isRe ? 're' : 'new', media: normMedia_(row[MCGI.media]),
+      });
     }
 
     // 歩留(③・オフィス別): ④と同じ「最後の応募日＋新規/再」基準でコホート判定。

@@ -572,7 +572,21 @@ function startedApplyPanel(o){
   }).join("");
   return `<div class="panel">${head}
     <div class="legend"><span>横軸＝人数</span><span>当月（${DATA.month}）応募分は濃色</span><span>新規/再応募＝総応募の電話初出で判定</span></div>
-    <div class="ba-wrap">${rows}</div></div>`;
+    <div class="ba-wrap">${rows}</div>
+    ${startedRoster(o)}</div>`;
+}
+/* ④下部：当月に開始した稼働者の名簿 */
+const GRADE_JP={A:"A人選",B:"B人選",C:"C人選",other:"その他"};
+function startedRoster(o){
+  const list=(o.startedList||[]).slice().sort((a,b)=>(a.startDate<b.startDate?-1:a.startDate>b.startDate?1:0));
+  if(!list.length) return "";
+  const rows=list.map(p=>`<tr><td>${p.startDate||"-"}</td><td class="l">${p.name||"-"}</td><td>${p.applyDate||"-"}</td><td>${p.newRe==="re"?"再応募":"新規"}</td><td>${GRADE_JP[p.grade]||p.grade||"-"}</td><td>${p.media||"-"}</td></tr>`).join("");
+  return `<div style="padding:0 16px 14px">
+    <div class="legend" style="margin-top:4px"><span>当月に開始した稼働者 ${num(list.length)}名（開始日順）</span></div>
+    <div class="scroll"><table>
+      <thead><tr><th>開始日</th><th class="l">氏名</th><th>最終応募日</th><th>新規/再</th><th>人選</th><th>媒体</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div></div>`;
 }
 
 /* 月セレクタの既定を当月に。該当オプションが無ければ最後（最新月）を選ぶ。 */
@@ -816,7 +830,7 @@ function renderAnalysis(){
   const a=ANALYSIS;
   if(!a){ $("#analysisView").innerHTML=`<div class="panel"><div style="padding:20px;color:var(--muted)">読み込み中…</div></div>`; return; }
   if(a.error){ $("#analysisView").innerHTML=`<div class="panel"><div class="panel-head"><h2>分析</h2></div><div style="padding:16px;color:var(--muted)">分析データが未生成です。GASエディタで <b>runAnalysis</b> を1回実行してください。<br><span style="font-size:11px">(${a.error})</span></div></div>`; return; }
-  $("#analysisView").innerHTML = ltvPanel_(a.ltv) + util2mPanel_(a.util2m) +
+  $("#analysisView").innerHTML = ltvPanel_(a.ltv) +
     `<p class="updated">分析生成: ${new Date(a.generatedAt).toLocaleString("ja-JP")}（履歴 ${num(a.records)}件）</p>`;
 }
 
@@ -825,7 +839,7 @@ const SECMETA={
   office:{title:"応募ダッシュボード",sub:"オフィス別｜総応募・MCG・人選を突合した集計ビュー"},
   media:{title:"媒体別パフォーマンス",sub:"応募媒体ごと｜オフィス別の内訳まで（Indeed・キューメイトは統合）"},
   selection:{title:"人選別",sub:"人選グレード×新規/再応募｜オフィス・エリア小計／詳細で稼働率・応募者明細"},
-  analysis:{title:"分析",sub:"LTV分析（180日前〜20日前）・2ヶ月用活用（前月の歩留）｜オフィス・エリア小計"},
+  analysis:{title:"分析",sub:"LTV分析（180日前〜20日前）｜応募→各ステージの平均経過日数・オフィス/エリア小計"},
 };
 const SECID={office:"officeSection",media:"mediaSection",selection:"selectionSection",analysis:"analysisSection"};
 function switchSection(sec){
