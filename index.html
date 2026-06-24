@@ -181,6 +181,7 @@
         <option value="2026-06">2026年6月</option>
       </select>
       <button id="exportSelBtn" title="人選シートから 人材番号＋人選ｽﾃｰﾀｽ だけのCSVをダウンロード">⬇ 人選CSV出力</button>
+      <button id="exportReportBtn" title="当月応募(純新規/再)・開始の内訳をレポートシートへ出力">📤 シート出力</button>
       <button class="refresh" id="refreshBtn">更新</button>
     </div>
   </header>
@@ -435,6 +436,7 @@ function renderChart(){
 
 /* ---- 一覧テーブル（人選数つき・クリックで詳細） ---- */
 const AREA_ORDER=["東北","関東","中日本","関西","九州"];
+const shortOffice=n=>(n||"").replace(/オフィス$/,""); // 一覧の幅圧縮：末尾の「オフィス」を除去
 /* オフィス1件ぶんの数値セル（行/小計/合計で共通） */
 function officeCells(v,sel){
   const rate=v.targetNew?Math.min(999,Math.round(v.forecast/v.targetNew*100)):0;
@@ -485,7 +487,7 @@ function renderList(){
   let body="";
   areas.forEach(area=>{
     const list=groups[area].map(i=>offices[i]);
-    groups[area].forEach(i=>{const o=offices[i];body+=`<tr class="click" data-i="${i}"><td class="l office">${o.office}</td>${officeCells(o.overview,o.selection)}</tr>`;});
+    groups[area].forEach(i=>{const o=offices[i];body+=`<tr class="click" data-i="${i}"><td class="l office">${shortOffice(o.office)}</td>${officeCells(o.overview,o.selection)}</tr>`;});
     if(multiArea) body+=`<tr class="subtotal"><td class="l">小計：${area}</td>${officeCells(sumOv(list),sumSel(list))}</tr>`;
   });
   $("#listTable").innerHTML=`<table>
@@ -872,6 +874,18 @@ $("#navAna").addEventListener("click",()=>switchSection("analysis"));
 $("#exportSelBtn").addEventListener("click",()=>{
   if(!API_URL){ alert("API未設定のため出力できません（モックデータ表示中）"); return; }
   window.open(`${API_URL}?export=selection`,"_blank");
+});
+$("#exportReportBtn").addEventListener("click",async()=>{
+  if(!API_URL){ alert("API未設定のため出力できません（モックデータ表示中）"); return; }
+  const btn=$("#exportReportBtn"), label=btn.textContent;
+  btn.disabled=true; btn.textContent="出力中…";
+  try{
+    const res=await fetch(`${API_URL}?export=report&month=${encodeURIComponent($("#monthSel").value)}&t=${Date.now()}`);
+    const j=await res.json();
+    if(j.ok) alert(`✅ レポートシートに出力しました\n対象月: ${j.month}／${j.offices}オフィス\n集計: ${j.generatedAt}`);
+    else alert("⚠️ 出力に失敗: "+(j.error||"unknown"));
+  }catch(err){ alert("⚠️ 出力に失敗: "+err.message); }
+  finally{ btn.disabled=false; btn.textContent=label; }
 });
 selectCurrentMonth();
 refresh();

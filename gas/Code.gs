@@ -35,6 +35,7 @@ const CONFIG = {
   // 出力（summary.json の置き場所。親フォルダに出力）
   OUTPUT_FOLDER_ID: '1B-WC1fRgXnYAhfAvxx3fGGXROqodB9vD',
   SUMMARY_FILENAME: 'summary.json',
+  REPORT_SHEET_ID: '13RCSXun7dcKbXUN4fPnoCIBSptg_5fLFT0iO8zw5T40', // ボタン出力先：当月応募/開始内訳のレポート
 
   // マスタ（スプレッドシート）
   PREF_OFFICE_SHEET_ID: '1quGDrLDXBkJ4iVO0dUhkGtbqAvs8_QRSaZHRXeAiJK4', // 都道府県↔オフィス
@@ -113,6 +114,10 @@ function doGet(e) {
     const fname = 'senbatsu_status_' + Utilities.formatDate(new Date(), CONFIG.TZ, 'yyyyMMdd') + '.csv';
     return ContentService.createTextOutput(buildSelectionCsv_())
       .setMimeType(ContentService.MimeType.CSV).downloadAsFile(fname);
+  }
+  if (e && e.parameter && e.parameter.export === 'report') { // ①当月応募②開始内訳を集計シートへ出力
+    try { return jsonOut_(Object.assign({ ok: true }, writeReportToSheet_(e.parameter.month))); }
+    catch (err) { return jsonOut_({ ok: false, error: String(err) }); }
   }
   const month = (e && e.parameter && e.parameter.month) || currentMonthKey_();
   let json = CacheService.getScriptCache().get(CONFIG.CACHE_KEY + ':' + month);
@@ -375,6 +380,16 @@ function runDailyAggregation(monthArg) {
   // 前日(最新応募日)の未登録者＝総応募にあって稼働データに電話が無い応募者
   const unregistered = computeUnregistered_(parsed, mcgPhoneSet);
 
+  // ① 当月の応募 オフィス別（純新規/再応募・電話ユニーク）。純新規=応募1回のみ／再応募=過去にも応募あり。
+  const r1seen = {};
+  parsed.forEach(x => {
+    if (!x.phone || !inRange_(x.d, range.monthStart, range.monthEnd)) return;
+    if (r1seen[x.phone]) return; r1seen[x.phone] = true; // 当月で電話ユニーク
+    if (!x.office || !acc[x.office]) return;
+    const isRe = !!(firstDateByPhone[x.phone] && lastDateByPhone[x.phone] && lastDateByPhone[x.phone].getTime() > firstDateByPhone[x.phone].getTime());
+    if (isRe) acc[x.office].report1.re += 1; else acc[x.office].report1.junNew += 1;
+  });
+
   // --- 仕上げ ---
   const elapsed = elapsedDays_(month), totalDays = daysInMonth_(month);
   Object.values(acc).forEach(o => {
@@ -612,6 +627,52 @@ function senbatsuLabel_(letter) {
 /* =========================================================================
  * 当月人選シート(1NsC65W)の読み書き
  * ========================================================================= */
+// レポート出力: 最新summaryから ①当月応募(純新規/再応募) と ②開始の内訳(4分類) をオフィス別に
+// REPORT_SHEET_ID の先頭シートへ書き出す（毎回まるごと置換）。
+function writeReportToSheet_(monthArg) {
+  const month = monthArg || currentMonthKey_();
+  let json = readSummaryFromDrive_(month);
+  if (!json) throw new Error('summary未生成: ' + month + '（先に集計してください）');
+  const summary = JSON.parse(json);
+  const offices = (summary.offices || []).slice();
+  const stamp = Utilities.formatDate(new Date(), CONFIG.TZ, 'yyyy-MM-dd HH:mm');
+  const out = [];
+  out.push(['当月応募・開始内訳レポート', '対象月: ' + summary.month, '集計: ' + stamp]);
+  out.push([]);
+
+  // ① 当月の応募（オフィス別・純新規/再応募）
+  out.push(['① 当月の応募（オフィス別・純新規/再応募）']);
+  out.push(['オフィス', '純新規', '再応募', '合計']);
+  const t1 = [0, 0];
+  offices.forEach(o => {
+    const r = o.report1 || { junNew: 0, re: 0 };
+    out.push([o.office, r.junNew, r.re, r.junNew + r.re]);
+    t1[0] += r.junNew; t1[1] += r.re;
+  });
+  out.push(['合計', t1[0], t1[1], t1[0] + t1[1]]);
+  out.push([]);
+
+  // ② 開始の内訳（オフィス別・4分類）
+  out.push(['② 開始の内訳（オフィス別）']);
+  out.push(['オフィス', '当月内応募の純新規', '前月の応募の純新規', '前月・当月応募の再応募', 'その他(DB)', '合計']);
+  const t2 = [0, 0, 0, 0];
+  offices.forEach(o => {
+    const r = o.report2 || { curNew: 0, prevNew: 0, re: 0, db: 0 };
+    const sum = r.curNew + r.prevNew + r.re + r.db;
+    out.push([o.office, r.curNew, r.prevNew, r.re, r.db, sum]);
+    t2[0] += r.curNew; t2[1] += r.prevNew; t2[2] += r.re; t2[3] += r.db;
+  });
+  out.push(['合計', t2[0], t2[1], t2[2], t2[3], t2[0] + t2[1] + t2[2] + t2[3]]);
+
+  const width = out.reduce((w, r) => Math.max(w, r.length), 1);
+  const norm = out.map(r => { const c = r.slice(); while (c.length < width) c.push(''); return c; });
+  const sh = SpreadsheetApp.openById(CONFIG.REPORT_SHEET_ID).getSheets()[0];
+  sh.clearContents();
+  sh.getRange(1, 1, norm.length, width).setValues(norm);
+  Logger.log('report出力: %s オフィス, 月=%s', offices.length, summary.month);
+  return { month: summary.month, offices: offices.length, generatedAt: stamp };
+}
+
 // 人選CSV出力: 当月人選シートから「人材番号(15列目)＋人選ｽﾃｰﾀｽ(29列目)」だけを抽出したCSV本文を返す。
 // Excelで文字化けしないよう先頭にBOM、改行はCRLF。
 function buildSelectionCsv_() {
@@ -685,6 +746,8 @@ function newOfficeAcc_(office, prefs, target, area) {
     funnel: { currentMonthNew: fnl(), within2MonthsNew: fnl(), reApplication: fnl() },
     bySelection: { A: { new: 0, re: 0, started: 0 }, B: { new: 0, re: 0, started: 0 }, C: { new: 0, re: 0, started: 0 }, ou: { new: 0, re: 0, started: 0 } },
     startedApply: {}, // 当月に開始した人の「応募月(yyyy-MM)→件数」分布（④用）
+    report1: { junNew: 0, re: 0 },                       // ①当月応募 純新規/再応募（電話ユニーク）
+    report2: { curNew: 0, prevNew: 0, re: 0, db: 0 },    // ②開始の内訳（当月内純新規/前月純新規/前月当月再応募/その他DB）
     applicants: [], // A/B/C の応募者明細（条件フラグ付き）
   };
 }
@@ -858,6 +921,8 @@ function readLatestCsvMatrix_(folderId, charset) {
 function fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, lastDateByPhone, mcgPhoneSet) {
   firstDateByPhone = firstDateByPhone || {};
   lastDateByPhone = lastDateByPhone || {};
+  const curKey = Utilities.formatDate(range.monthStart, CONFIG.TZ, 'yyyy-MM');     // 当月
+  const prevKey = Utilities.formatDate(range.twoMonthStart, CONFIG.TZ, 'yyyy-MM'); // 前月
   const rows = readLatestCsvMatrix_(CONFIG.MCG_FOLDER_ID, CONFIG.CHARSET_MCG);
   let setHit = 0, startHit = 0, minA = null, maxA = null;
   rows.forEach(row => {
@@ -881,6 +946,12 @@ function fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, la
       const k = ld ? Utilities.formatDate(ld, CONFIG.TZ, 'yyyy-MM') : '不明';
       const b = acc[office].startedApply[k] || (acc[office].startedApply[k] = { total: 0, new: 0, re: 0 });
       b.total += 1; if (isRe) b.re += 1; else b.new += 1;
+      // ②開始の内訳: 最後の応募月＋純新規/再応募で4分類（当月純新規/前月純新規/前月当月の再応募/その他DB）
+      const r2 = acc[office].report2;
+      if (!isRe && k === curKey) r2.curNew += 1;
+      else if (!isRe && k === prevKey) r2.prevNew += 1;
+      else if (isRe && (k === curKey || k === prevKey)) r2.re += 1;
+      else r2.db += 1;
     }
 
     // 歩留(③・オフィス別): ④と同じ「最後の応募日＋新規/再」基準でコホート判定。
