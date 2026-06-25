@@ -211,8 +211,10 @@ function runDailyAggregation(monthArg) {
     return m[date] || (m[date] = { new: 0, re: 0, ab: 0 });
   };
   // キューメイトのサブ内訳（Indeed / その他）。詳細ページ専用。
+  // 人選シートはIndeed流入もプレーン「キューメイト」表記のため、総応募で"indeed"だった電話を記録し電話で名寄せする。
   const queSub = { Indeed: newQueSub_(), Other: newQueSub_() };
-  const queBucket = raw => (/indeed/i.test((raw || '').toString()) ? 'Indeed' : 'Other');
+  const indeedPhones = {};
+  const queBucket = (phone, raw) => ((phone && indeedPhones[phone]) || /indeed/i.test((raw || '').toString())) ? 'Indeed' : 'Other';
   const reDailySeen = {};        // 日次の再応募を電話ユニークにするための既出管理
   const rePhoneInMonth = {};     // 当月に再応募した電話（歩留の再応募コホート判定用）
   const range = monthRange_(month);
@@ -257,6 +259,7 @@ function runDailyAggregation(monthArg) {
       if (x.first) firstDateByPhone[x.phone] = x.d;
       lastDateByPhone[x.phone] = x.d;                // 昇順走査なので最終的に最終応募日が残る
     } else { x.first = true; }
+    if (x.phone && /indeed/i.test(x.mediaRaw)) indeedPhones[x.phone] = true; // Indeed応募の電話を記録（人選側の名寄せ用）
   });
 
   // --- ① 総応募: 当月の新規/再応募・日次（再応募も電話ユニーク） ---
@@ -284,7 +287,7 @@ function runDailyAggregation(monthArg) {
     }
     // キューメイトのサブ内訳（Indeed / その他）: 新規/再応募の件数
     if (x.media === 'キューメイト') {
-      const q = queSub[queBucket(x.mediaRaw)].overview;
+      const q = queSub[queBucket(x.phone, x.mediaRaw)].overview;
       if (x.first) q.newApplications += 1; else q.reApplications += 1;
     }
   });
@@ -310,7 +313,7 @@ function runDailyAggregation(monthArg) {
     const inMonth = inRange_(d, range.monthStart, range.monthEnd);
     const letter = judgeFromRow_(row);
     const ab = letter === 'A' || letter === 'B';
-    const qsub = media === 'キューメイト' ? queSub[queBucket(row[MCGI.media])] : null; // キューメイトのサブ内訳
+    const qsub = media === 'キューメイト' ? queSub[queBucket(phone, row[MCGI.media])] : null; // キューメイトのサブ内訳（電話で名寄せ）
 
     // 電話応募 = MCGにあり総応募に無い電話（当月・電話でユニーク）→ 新規に加算
     if (inMonth && phone && !totalPhoneSet[phone]) {
