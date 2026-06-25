@@ -210,6 +210,9 @@ function runDailyAggregation(monthArg) {
     const m = mediaDailyMap[media] || (mediaDailyMap[media] = {});
     return m[date] || (m[date] = { new: 0, re: 0, ab: 0 });
   };
+  // キューメイトのサブ内訳（Indeed / その他）。詳細ページ専用。
+  const queSub = { Indeed: newQueSub_(), Other: newQueSub_() };
+  const queBucket = raw => (/indeed/i.test((raw || '').toString()) ? 'Indeed' : 'Other');
   const reDailySeen = {};        // 日次の再応募を電話ユニークにするための既出管理
   const rePhoneInMonth = {};     // 当月に再応募した電話（歩留の再応募コホート判定用）
   const range = monthRange_(month);
@@ -243,6 +246,7 @@ function runDailyAggregation(monthArg) {
     phoneRaw: (r[COL.total.phone] || '').toString().trim(),
     name: (r['氏名（漢字）'] || r['氏名'] || r['お名前'] || '').toString().trim(),
     media: normMedia_(r[COL.total.media]),
+    mediaRaw: (r[COL.total.media] || '').toString(),
     d: parseDate_(r[COL.total.applyDate]),
   })).filter(x => x.d);
   parsed.sort((a, b) => a.d - b.d);
@@ -278,6 +282,11 @@ function runDailyAggregation(monthArg) {
         if (isAB(x.phone)) { acc[x.office].overview.reAB += 1; mo.overview.reAB += 1; }
       }
     }
+    // キューメイトのサブ内訳（Indeed / その他）: 新規/再応募の件数
+    if (x.media === 'キューメイト') {
+      const q = queSub[queBucket(x.mediaRaw)].overview;
+      if (x.first) q.newApplications += 1; else q.reApplications += 1;
+    }
   });
 
   // 日次グラフ(総応募)＝行数ベース。重複ユニーク化せず、オフィス未割当行も含めて当日の実件数を数える。
@@ -301,6 +310,7 @@ function runDailyAggregation(monthArg) {
     const inMonth = inRange_(d, range.monthStart, range.monthEnd);
     const letter = judgeFromRow_(row);
     const ab = letter === 'A' || letter === 'B';
+    const qsub = media === 'キューメイト' ? queSub[queBucket(row[MCGI.media])] : null; // キューメイトのサブ内訳
 
     // 電話応募 = MCGにあり総応募に無い電話（当月・電話でユニーク）→ 新規に加算
     if (inMonth && phone && !totalPhoneSet[phone]) {
@@ -315,6 +325,7 @@ function runDailyAggregation(monthArg) {
         firstDateByPhone[phone] = d; // 歩留でも当月の新規扱い
         const dm = dailyMap[fmtDate_(d)] || (dailyMap[fmtDate_(d)] = { new: 0, re: 0, phone: 0, ab: 0 }); // 日次グラフに電話応募を加算
         dm.phone += 1; if (ab) dm.ab += 1;
+        if (qsub) { qsub.overview.phoneApplications += 1; qsub.overview.newApplications += 1; }
       }
     }
 
@@ -322,11 +333,13 @@ function runDailyAggregation(monthArg) {
     if (inMonth && (row[MCGI.contactStatus] || '').toString().trim().indexOf(CONTACT_PREFIX) === 0) {
       acc[office].overview.contacts += 1;
       mo.overview.contacts += 1;
+      if (qsub) qsub.overview.contacts += 1;
     }
 
     // 人選（当月応募・A/B/C/その他）
     if (inMonth) {
       bumpSelection_(acc[office].selection, letter); bumpSelection_(mo.selection, letter);
+      if (qsub) bumpSelection_(qsub.selection, letter);
       // 人選別: グレード×新規/再・稼働(就業開始)。A/B/Cは応募者明細も保持。
       const g = (letter === 'A' || letter === 'B' || letter === 'C') ? letter : 'ou';
       const isRe = !!rePhoneInMonth[phone];
@@ -417,7 +430,9 @@ function runDailyAggregation(monthArg) {
     }).filter(mediaOfficeHasData_).sort((a, b) => b.overview.newApplications - a.overview.newApplications);
     const tot = sumMediaOffices_(offices);
     tot.overview.budget = budget.byMedia[media] || 0; // 媒体合計の予算（全オフィス列合計）
-    return { media: media, overview: tot.overview, selection: tot.selection, funnel: tot.funnel, offices: offices, daily: mediaDailyOut(media) };
+    const out = { media: media, overview: tot.overview, selection: tot.selection, funnel: tot.funnel, offices: offices, daily: mediaDailyOut(media) };
+    if (media === 'キューメイト') out.sub = queSub; // 詳細ページ用の Indeed / その他 内訳
+    return out;
   }).filter(m => m.offices.length > 0).sort((a, b) => b.overview.newApplications - a.overview.newApplications);
 
   const daily = Object.keys(dailyMap).sort().map(k => {
@@ -578,14 +593,14 @@ function bumpSelection_(sel, letter) {
  *   友人紹介 ← 友人紹介（オーガニック）/ BS
  *   自社     ← 自社/自社（会員登録）/自社（電話）/自社（求人応募）等
  *   その他媒体 ← その他媒体 / タウンワーク
- *   キューメイト ← キューメイト系 / Indeed / 求人ボックス / バイトル(Pro) / 不明 / 空欄
+ *   キューメイト ← キューメイト系 / Indeed / スタンバイ / 求人ボックス / バイトル(Pro) / 不明 / 空欄
  *   それ以外（マイナビ・e介護転職・エン派遣 等）は原文のまま。 */
 function normMedia_(m) {
   const s = (m || '').toString().trim();
   if (s.indexOf('友人紹介') >= 0 || s === 'BS') return '友人紹介';
   if (s.indexOf('自社') >= 0) return '自社';
   if (s.indexOf('その他媒体') >= 0 || s.indexOf('タウンワーク') >= 0) return 'その他媒体';
-  if (!s || s.indexOf('キューメイト') >= 0 || /indeed/i.test(s) ||
+  if (!s || s.indexOf('キューメイト') >= 0 || /indeed/i.test(s) || s.indexOf('スタンバイ') >= 0 ||
       s.indexOf('求人ボックス') >= 0 || s.indexOf('バイトル') >= 0 || s.indexOf('不明') >= 0) return 'キューメイト';
   return s;
 }
@@ -606,6 +621,13 @@ function mediaOfficeHasData_(mo) {
 }
 
 // 媒体内の複数オフィス集計を合算して媒体合計を作る
+function newQueSub_() {
+  return {
+    overview: { newApplications: 0, phoneApplications: 0, reApplications: 0, contacts: 0, newAB: 0, reAB: 0 },
+    selection: { A: 0, B: 0, C: 0, other: 0, unknown: 0 },
+  };
+}
+
 function sumMediaOffices_(offices) {
   const overview = { newApplications: 0, phoneApplications: 0, reApplications: 0, contacts: 0, newAB: 0, reAB: 0 };
   const selection = { A: 0, B: 0, C: 0, other: 0, unknown: 0 };
