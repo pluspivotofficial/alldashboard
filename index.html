@@ -184,7 +184,8 @@
       </select>
       <button id="exportSelBtn" title="人選シートから 人材番号＋人選ｽﾃｰﾀｽ だけのCSVをダウンロード">⬇ 人選CSV出力</button>
       <button id="exportReportBtn" title="当月応募(純新規/再)・開始の内訳をレポートシートへ出力">📤 シート出力</button>
-      <button class="refresh" id="refreshBtn">更新</button>
+      <button class="refresh" id="aggBtn" title="①総応募＋②人選＋③稼働データを突合して集計（稼働データ投入後に押す）">🔄 集計実行</button>
+      <button id="refreshBtn">更新</button>
     </div>
   </header>
 
@@ -961,6 +962,19 @@ async function refresh(){
   render();
 }
 $("#refreshBtn").addEventListener("click",refresh);
+$("#aggBtn").addEventListener("click",async()=>{
+  if(!API_URL){ alert("API未設定のため実行できません（モックデータ表示中）"); return; }
+  const btn=$("#aggBtn"), label=btn.textContent;
+  btn.disabled=true; btn.textContent="集計中…";
+  $("#updated").textContent="集計実行中…（稼働データを読み込むため30秒〜1分ほどかかります）";
+  try{
+    const res=await fetch(`${API_URL}?run=aggregate&t=${Date.now()}`);
+    const j=await res.json();
+    if(!j.ok){ $("#updated").textContent="集計に失敗: "+(j.error||"unknown"); return; }
+    await refresh(); // 最新サマリーを取得して再描画
+  }catch(err){ $("#updated").textContent="集計に失敗: "+err.message; }
+  finally{ btn.disabled=false; btn.textContent=label; }
+});
 $("#monthSel").addEventListener("change",refresh);
 $("#officeChartMode").addEventListener("change",renderChart);
 $("#navOffice").addEventListener("click",()=>switchSection("office"));

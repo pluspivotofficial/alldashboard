@@ -109,7 +109,7 @@ async function upload() {
     const j = await res.json();
     if (j.ok) {
       $('status').innerHTML =
-        `<div>✅ 人選シートを更新しました（${j.rows}件${j.month ? '・集計 ' + j.month : ''}）。ダッシュボードに反映されます。</div>`
+        `<div>✅ 人選シートを更新しました（${j.rows}件）。<b>稼働データ投入後、ダッシュボードの「🔄 集計実行」</b>で反映してください。</div>`
         + renderTally(j.tally);
     } else {
       $('status').textContent = '⚠️ 失敗: ' + (j.error || 'unknown');

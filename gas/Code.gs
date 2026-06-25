@@ -116,6 +116,10 @@ function doGet(e) {
     return ContentService.createTextOutput(buildSelectionCsv_())
       .setMimeType(ContentService.MimeType.CSV).downloadAsFile(fname);
   }
+  if (e && e.parameter && e.parameter.run === 'aggregate') { // 「集計実行」ボタン：①②③を突合してダッシュボード反映
+    try { const s = runDailyAggregation(); return jsonOut_({ ok: true, month: s.month, offices: s.offices.length, generatedAt: s.generatedAt }); }
+    catch (err) { return jsonOut_({ ok: false, error: String(err) }); }
+  }
   if (e && e.parameter && e.parameter.export === 'report') { // ①当月応募②開始内訳を集計シートへ出力
     try { return jsonOut_(Object.assign({ ok: true }, writeReportToSheet_(e.parameter.month))); }
     catch (err) { return jsonOut_({ ok: false, error: String(err) }); }
@@ -127,16 +131,12 @@ function doGet(e) {
   return ContentService.createTextOutput(json).setMimeType(ContentService.MimeType.JSON);
 }
 
-// 統合ツール(obo-data-tool)が「Driveへ連携」したCSVを受け取る。
-//   token … CONFIG.UPLOAD_TOKEN と一致必須
-//   csv   … 統合済みCSV本文（フォームエンコードで送信＝CORSプリフライト回避）
-// 受領後: TOTAL_FOLDER_ID に新ファイル保存 → そのまま追記＆当月集計まで実行（ダッシュボード即更新）。
-/* データフロー（3ステップ。③をキーにダッシュボードへ最終反映）
- *   ① 総応募CSV(obo-data-tool) … TOTAL_FOLDERへ保存(ステージング)のみ。集計はしない。
- *   ② 稼働CSV … MCGフォルダへアップロード(Drive)。③の集計時に最新ファイルを読む。
- *   ③ 人選MCG CSV(obo-data-tool, type=senbatsu) … 人選シートを更新し、フル集計を実行して
- *      ①(保存済み総応募を追記)＋②(稼働最新)＋③(人選)を突合 → ダッシュボードへ反映。
- * （①単独でも7:30トリガーが拾うので取りこぼしは無い） */
+/* データフロー（①②③ステージング → ④ボタンで反映）
+ *   ① 総応募CSV(応募ツール)  … TOTAL_FOLDERへ保存(ステージング)のみ。集計しない＝まだ反映しない。
+ *   ② 人選CSV(senbatsu.html) … 当月人選シートを更新＋1次判定を返すのみ。集計しない＝まだ反映しない。
+ *   ③ 稼働CSV … MCGフォルダへアップロード(Drive)。
+ *   ④ ダッシュボードの「集計実行」ボタン or 7:30トリガー → runDailyAggregation()
+ *      ＝ ①(保存済み総応募を追記)＋②(人選シート)＋③(稼働最新)を突合 → ダッシュボードへ反映。 */
 function doPost(e) {
   try {
     const p = (e && e.parameter) || {};
@@ -144,24 +144,19 @@ function doPost(e) {
     const csv = p.csv;
     if (!csv) return jsonOut_({ ok: false, error: 'no csv body' });
 
-    // ③ type=senbatsu … 人選データCSV。1NsC65W形式へ整形＋人選ｽﾃｰﾀｽを4条件で算出して当月人選シートを丸ごと置換し、
-    //    続けてフル集計（①の保存済み総応募を追記＋②の稼働最新を突合）を実行 ＝ ダッシュボード反映のキー。
+    // ② type=senbatsu … 人選データCSVを当月人選シートへ整形・置換し、1次判定(A/B/C/その他)を返す。
+    //    集計はしない（ダッシュボード反映は③稼働投入後に「集計実行」ボタン／定時トリガーで行う）。
     if (p.type === 'senbatsu') {
       const result = writeSenbatsuSheet_(csv);
-      let summary = null;
-      try { summary = runDailyAggregation(); } catch (err) { Logger.log('post-aggregate failed: ' + err); }
-      return jsonOut_({
-        ok: true, mode: 'senbatsu', rows: result.rows, tally: result.tally,
-        month: summary && summary.month, offices: summary ? summary.offices.length : null,
-      });
+      return jsonOut_({ ok: true, mode: 'senbatsu', rows: result.rows, tally: result.tally });
     }
 
-    // ① 既定 … 総応募CSV。TOTAL_FOLDERへ保存(ステージング)のみ。反映は③(人選)取込時、または7:30トリガーで実行。
+    // ① 既定 … 総応募CSV。TOTAL_FOLDERへ保存(ステージング)のみ。反映は④集計実行（ボタン/7:30トリガー）で行う。
     const name = '応募データ統合_' + Utilities.formatDate(new Date(), CONFIG.TZ, 'yyyyMMdd_HHmmss') + '.csv';
     DriveApp.getFolderById(CONFIG.TOTAL_FOLDER_ID).createFile(name, csv, 'text/csv');
     return jsonOut_({
       ok: true, savedFile: name, staged: true,
-      note: '総応募を保存しました。人選(③)の取り込み時、または定時にダッシュボードへ反映されます。',
+      note: '総応募を保存しました。稼働データ投入後に「集計実行」ボタン、または定時で反映されます。',
     });
   } catch (err) {
     return jsonOut_({ ok: false, error: String(err) });
