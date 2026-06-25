@@ -40,6 +40,7 @@ const CONFIG = {
   // マスタ（スプレッドシート）
   PREF_OFFICE_SHEET_ID: '1quGDrLDXBkJ4iVO0dUhkGtbqAvs8_QRSaZHRXeAiJK4', // 都道府県↔オフィス
   TARGET_SHEET_ID: '1pd3HgF5zE8Njd7SLQZqTvbzyGMGtlIMhOAfUV7Sl7dY',     // オフィス別目標
+  BUDGET_SHEET_ID: '1nF5HqLEx9RwNjZPIOZzAiPi-42QUHpLLF6rRpHHSmuQ',     // 媒体予算（オフィス×媒体のマトリクス）
 
   // 文字コード（ソース別）
   CHARSET_TOTAL: 'UTF-8',
@@ -406,14 +407,16 @@ function runDailyAggregation(monthArg) {
     const dm = mediaDailyMap[media] || {};
     return Object.keys(dm).sort().map(k => ({ date: k, new: dm[k].new, re: dm[k].re, total: dm[k].new + dm[k].re, ab: dm[k].ab }));
   };
+  const budget = loadMediaBudget_(prefToOffice); // 媒体予算（CPA算出用・県名は集約先オフィスへ寄せる）
   const mediaOut = Object.keys(mediaMap).map(media => {
-    const offices = Object.keys(mediaMap[media]).map(office => ({
-      office: office,
-      overview: mediaMap[media][office].overview,
-      selection: mediaMap[media][office].selection,
-      funnel: mediaMap[media][office].funnel,
-    })).filter(mediaOfficeHasData_).sort((a, b) => b.overview.newApplications - a.overview.newApplications);
+    const bmo = budget.byMediaOffice[media] || {};
+    const offices = Object.keys(mediaMap[media]).map(office => {
+      const ov = mediaMap[media][office].overview;
+      ov.budget = bmo[office] || 0; // オフィス×媒体の予算
+      return { office: office, overview: ov, selection: mediaMap[media][office].selection, funnel: mediaMap[media][office].funnel };
+    }).filter(mediaOfficeHasData_).sort((a, b) => b.overview.newApplications - a.overview.newApplications);
     const tot = sumMediaOffices_(offices);
+    tot.overview.budget = budget.byMedia[media] || 0; // 媒体合計の予算（全オフィス列合計）
     return { media: media, overview: tot.overview, selection: tot.selection, funnel: tot.funnel, offices: offices, daily: mediaDailyOut(media) };
   }).filter(m => m.offices.length > 0).sort((a, b) => b.overview.newApplications - a.overview.newApplications);
 
@@ -812,6 +815,36 @@ function loadOfficeArea_() {
 }
 
 // 目標: オフィス → 目標
+// 媒体予算（オフィス×媒体のマトリクス）を読み、{ byMedia:{媒体:合計}, byMediaOffice:{媒体:{オフィス:額}} } を返す。
+// 1行目=ヘッダー(空, キューメイト, e介護転職, …)、各行=オフィス名(短縮)＋媒体ごとの予算。媒体名はnormMedia_で正規化。
+function loadMediaBudget_(prefToOffice) {
+  prefToOffice = prefToOffice || {};
+  const known = {}; Object.values(prefToOffice).forEach(o => { known[o] = true; }); // 実在オフィス名
+  const byMedia = {}, byMediaOffice = {};
+  try {
+    const vals = SpreadsheetApp.openById(CONFIG.BUDGET_SHEET_ID).getSheets()[0].getDataRange().getValues();
+    if (vals.length < 2) return { byMedia: byMedia, byMediaOffice: byMediaOffice };
+    const raw = vals[0].map(h => (h || '').toString().trim());
+    for (let r = 1; r < vals.length; r++) {
+      const off = (vals[r][0] || '').toString().trim();
+      if (!off) continue;
+      let office = /オフィス$/.test(off) ? off : off + 'オフィス';
+      if (!known[office]) { // 実在しない場合は県名として解決（例: 埼玉→埼玉県→新宿オフィス）
+        office = prefToOffice[off] || prefToOffice[off + '県'] || prefToOffice[off + '都'] || prefToOffice[off + '府'] || office;
+      }
+      for (let c = 1; c < raw.length; c++) {
+        if (!raw[c]) continue;
+        const media = normMedia_(raw[c]);
+        const amt = Number((vals[r][c] || '').toString().replace(/[^0-9.]/g, '')) || 0;
+        if (!amt) continue;
+        byMedia[media] = (byMedia[media] || 0) + amt;
+        (byMediaOffice[media] || (byMediaOffice[media] = {}))[office] = (byMediaOffice[media][office] || 0) + amt;
+      }
+    }
+  } catch (e) { Logger.log('budget load skipped: ' + e); }
+  return { byMedia: byMedia, byMediaOffice: byMediaOffice };
+}
+
 function loadTargets_() {
   const map = {};
   parseMaster_(CONFIG.TARGET_SHEET_ID, ['オフィス', 'オフィス名'], ['目標', '目標新規'])

@@ -598,6 +598,8 @@ function selectCurrentMonth(){
 
 /* ===== 媒体別ビュー ===== */
 const mSelTotal = o => ["A","B","C","other","unknown"].reduce((a,k)=>a+(o.selection[k]||0),0);
+const yen = v => v ? ("¥"+Math.round(v).toLocaleString()) : "-";              // 予算表示
+const cpa = (b,c) => (b&&c) ? ("¥"+Math.round(b/c).toLocaleString()) : "-";   // CPA=予算/件数
 
 function renderMediaList(){
   const media = DATA.media || [];
@@ -620,6 +622,9 @@ function renderMediaList(){
       <td>${num(v.contacts)}</td>
       <td>${num(mSelTotal(m))}</td>
       <td class="refcol">${num(v.newAB+v.reAB)}</td>
+      <td>${yen(v.budget)}</td>
+      <td>${cpa(v.budget,v.newApplications)}</td>
+      <td class="refcol">${cpa(v.budget,v.newAB+v.reAB)}</td>
     </tr>`;
   }).join("");
   $("#mediaListView").innerHTML=`
@@ -631,9 +636,9 @@ function renderMediaList(){
     <div class="panel">
       <div class="panel-head"><h2>媒体一覧</h2><span class="hint">行をクリックでオフィス別の内訳へ</span></div>
       <div class="scroll"><table>
-        <thead><tr><th class="l">媒体</th><th>新規応募</th><th>再応募</th><th>電話応募</th><th>接触数</th><th>人選数</th><th class="ref">A+B人選</th></tr></thead>
-        <tbody>${rows||`<tr><td class="l" colspan="7">媒体データがありません（GAS再集計後に表示されます）</td></tr>`}</tbody>
-        <tfoot><tr><td class="l">合計</td><td>${num(sum(media,"overview.newApplications"))}</td><td>${num(sum(media,"overview.reApplications"))}</td><td>${num(sum(media,"overview.phoneApplications"))}</td><td>${num(sum(media,"overview.contacts"))}</td><td>${num(selTotal)}</td><td>${num(sum(media,"overview.newAB")+sum(media,"overview.reAB"))}</td></tr></tfoot>
+        <thead><tr><th class="l">媒体</th><th>新規応募</th><th>再応募</th><th>電話応募</th><th>接触数</th><th>人選数</th><th class="ref">A+B人選</th><th>予算</th><th>新規応募CPA</th><th class="ref">A+B人選CPA</th></tr></thead>
+        <tbody>${rows||`<tr><td class="l" colspan="10">媒体データがありません（GAS再集計後に表示されます）</td></tr>`}</tbody>
+        <tfoot><tr><td class="l">合計</td><td>${num(sum(media,"overview.newApplications"))}</td><td>${num(sum(media,"overview.reApplications"))}</td><td>${num(sum(media,"overview.phoneApplications"))}</td><td>${num(sum(media,"overview.contacts"))}</td><td>${num(selTotal)}</td><td>${num(sum(media,"overview.newAB")+sum(media,"overview.reAB"))}</td><td>${yen(sum(media,"overview.budget"))}</td><td>${cpa(sum(media,"overview.budget"),sum(media,"overview.newApplications"))}</td><td class="refcol">${cpa(sum(media,"overview.budget"),sum(media,"overview.newAB")+sum(media,"overview.reAB"))}</td></tr></tfoot>
       </table></div>
     </div>`;
   renderMediaStackChart("mediaStack", media, DATA.month);
@@ -665,6 +670,9 @@ function showMediaDetail(i){
       <td>${num(ov.contacts)}</td>
       <td>${num(["A","B","C","other","unknown"].reduce((a,k)=>a+(o.selection[k]||0),0))}</td>
       <td class="refcol">${num(ov.newAB+ov.reAB)}</td>
+      <td>${yen(ov.budget)}</td>
+      <td>${cpa(ov.budget,ov.newApplications)}</td>
+      <td class="refcol">${cpa(ov.budget,ov.newAB+ov.reAB)}</td>
     </tr>`;}).join("");
   const chartPanel=`<div class="panel"><div class="panel-head"><h2>③ 日次推移</h2><span class="hint">点線＝月末までの着地予測</span></div>
     <div class="chart-legend">
@@ -676,8 +684,8 @@ function showMediaDetail(i){
     <div class="chart-wrap" id="mediaDetailChart"></div></div>`;
   const officeTable=`<div class="panel"><div class="panel-head"><h2>④ オフィス別パフォーマンス</h2><span class="hint">${m.media}</span></div>
     <div class="scroll"><table>
-      <thead><tr><th class="l">オフィス</th><th>新規応募</th><th>再応募</th><th>電話応募</th><th>接触数</th><th>人選数</th><th class="ref">A+B人選</th></tr></thead>
-      <tbody>${orows||`<tr><td class="l" colspan="7">データなし</td></tr>`}</tbody>
+      <thead><tr><th class="l">オフィス</th><th>新規応募</th><th>再応募</th><th>電話応募</th><th>接触数</th><th>人選数</th><th class="ref">A+B人選</th><th>予算</th><th>新規応募CPA</th><th class="ref">A+B人選CPA</th></tr></thead>
+      <tbody>${orows||`<tr><td class="l" colspan="10">データなし</td></tr>`}</tbody>
     </table></div></div>`;
   $("#mediaDetailView").innerHTML=`
     <button class="back" id="mBack">← 媒体一覧に戻る</button>
