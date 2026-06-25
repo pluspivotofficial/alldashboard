@@ -919,10 +919,21 @@ function switchSection(sec){
   $("#navSel").classList.toggle("active",sec==="selection");
   $("#navAna").classList.toggle("active",sec==="analysis");
   $("#secTitle").textContent=SECMETA[sec].title; $("#secSub").textContent=SECMETA[sec].sub;
-  if(sec==="media"){ renderMediaList(); showMediaList(); }
-  else if(sec==="selection"){ renderSelList(); showSelList(); }
+  ensureSection(sec); // 初回のみ描画（遅延描画）
+  if(sec==="media") showMediaList();
+  else if(sec==="selection") showSelList();
+  else if(sec==="office") showList();
+}
+
+/* 遅延描画：現在のDATAに対して各セクションを1度だけ描画する */
+let SECTION_RENDERED={};
+function ensureSection(sec){
+  if(SECTION_RENDERED[sec]) return;
+  SECTION_RENDERED[sec]=true;
+  if(sec==="office") renderList();
+  else if(sec==="media") renderMediaList();
+  else if(sec==="selection") renderSelList();
   else if(sec==="analysis"){ renderAnalysis(); loadAnalysis().then(renderAnalysis); }
-  else showList();
 }
 
 function activeSection(){
@@ -933,9 +944,10 @@ function activeSection(){
 }
 function render(){
   if(!DATA.daily||!DATA.daily.length) DATA.daily=genDaily(DATA.month); // モック補完
-  renderList(); renderMediaList(); renderSelList();
+  SECTION_RENDERED={};                 // 新しいデータ → 全セクションを再描画対象に
   const a=activeSection();
-  if(a==="media") showMediaList(); else if(a==="selection") showSelList(); else if(a==="analysis") renderAnalysis(); else showList();
+  ensureSection(a);                    // 表示中のセクションだけ即描画（他は切替時に描画）
+  if(a==="media") showMediaList(); else if(a==="selection") showSelList(); else if(a==="office") showList();
   const tag = API_URL ? "" : "（モックデータ）";
   $("#updated").textContent="集計時刻: "+new Date(DATA.generatedAt).toLocaleString("ja-JP")+tag;
 }
