@@ -63,6 +63,8 @@
 
   tr.click{cursor:pointer}
   tr.click:hover{background:#f0f3ff}
+  tr.click-area{cursor:pointer}
+  tr.click-area:hover td{background:#e3e8fb}
   tr.click td.office::after{content:"›";color:var(--muted);margin-left:8px;font-weight:700}
 
   .bar{display:inline-flex;align-items:center;gap:7px;justify-content:flex-end;width:100%}
@@ -488,7 +490,7 @@ function renderList(){
   areas.forEach(area=>{
     const list=groups[area].map(i=>offices[i]);
     groups[area].forEach(i=>{const o=offices[i];body+=`<tr class="click" data-i="${i}"><td class="l office">${shortOffice(o.office)}</td>${officeCells(o.overview,o.selection)}</tr>`;});
-    if(multiArea) body+=`<tr class="subtotal"><td class="l">小計：${area}</td>${officeCells(sumOv(list),sumSel(list))}</tr>`;
+    if(multiArea) body+=`<tr class="subtotal click-area" data-area="${area}" title="クリックでエリア集計の詳細"><td class="l">小計：${area} ›</td>${officeCells(sumOv(list),sumSel(list))}</tr>`;
   });
   $("#listTable").innerHTML=`<table>
     <thead><tr><th class="l">オフィス</th><th>新規応募</th><th>再応募</th><th>目標(新規)</th><th>達成率</th><th>着地見込み</th><th>A人選</th><th>B人選</th><th class="ref">A+B人選</th><th>C人選</th><th>その他+不明</th><th>接触数</th><th>設定数</th><th>開始数</th></tr></thead>
@@ -496,15 +498,17 @@ function renderList(){
     <tfoot><tr><td class="l">合計</td>${officeCells(sumOv(offices),sumSel(offices))}</tr></tfoot>
   </table>`;
   document.querySelectorAll("#listTable tr.click").forEach(tr=>tr.addEventListener("click",()=>showDetail(+tr.dataset.i)));
+  document.querySelectorAll("#listTable tr.click-area").forEach(tr=>tr.addEventListener("click",()=>{
+    const gs=officeAreaGroups(),idx=gs.findIndex(g=>g.area===tr.dataset.area); if(idx>=0) showAreaDetail(idx);
+  }));
 }
 
-/* ---- 詳細: 1オフィス分（参考値つき） ---- */
-function showDetail(i){
-  const o=DATA.offices[i], v=o.overview;
+/* ---- 詳細パネル（①②③④）：オフィス／エリア集計で共通 ---- */
+function detailPanels(o){
+  const v=o.overview;
   const rate=v.targetNew?Math.round(v.forecast/v.targetNew*100):0;
   const statRef=(l,val,sub,ref)=>`<div class="stat"><div class="s-l">${l}</div><div class="s-v">${num(val)}</div>${sub?`<div class="s-l">${sub}</div>`:""}${ref!=null?`<div class="s-ref">うちA+B人選 ${num(ref)}</div>`:""}</div>`;
   const stat=(l,val,sub="")=>`<div class="stat"><div class="s-l">${l}</div><div class="s-v">${num(val)}</div>${sub?`<div class="s-l">${sub}</div>`:""}</div>`;
-  // ① サマリー（新規・再応募に「うちA+B人選」参考値）
   const summary=`<div class="panel"><div class="panel-head"><h2>① 応募サマリー</h2><span class="hint">${DATA.month}</span></div>
     <div class="stat-grid">
       ${statRef("新規応募",v.newApplications,`目標 ${num(v.targetNew)}`,v.newAB)}
@@ -515,14 +519,12 @@ function showDetail(i){
       <div class="stat"><div class="s-l">着地見込み</div><div class="s-v">${num(v.forecast)}</div><div class="s-l">${pill(v.forecast-v.targetNew)} 対目標</div></div>
       ${stat("接触数",v.contacts)}
     </div></div>`;
-  // ② 人選判定
   const s=o.selection;
   const selCard=(cls,val,l)=>`<div class="sel ${cls}"><div class="s-v">${num(val)}</div><div class="s-l">${l}</div></div>`;
   const selection=`<div class="panel"><div class="panel-head"><h2>② 人選判定</h2><span class="hint">人数</span></div>
     <div class="sel-grid">
       ${selCard("tagA",s.A,"A人選")}${selCard("tagB",s.B,"B人選")}${selCard("tagC",s.C,"C人選")}${selCard("tagO",s.other,"その他")}${selCard("tagU",s.unknown,"不明")}
     </div></div>`;
-  // ③ 歩留（区分ごとに A+B人選 参考列）
   const groups=[["currentMonthNew","当月内応募・新規"],["within2MonthsNew","2ヶ月以内応募・新規"],["reApplication","再応募"]];
   const stats=[["set","設定"],["done","実施"],["decided","決定"],["started","開始"]];
   const frows=groups.map(([g,l])=>`<tr><td class="l">${l}</td>${stats.map(([k])=>`<td>${num(o.funnel[g][k])}</td>`).join("")}<td class="refcol">${num(o.funnel[g].ab)}</td></tr>`).join("");
@@ -532,22 +534,64 @@ function showDetail(i){
       <thead><tr><th class="l">応募区分</th>${stats.map(([,l])=>`<th>${l}</th>`).join("")}<th class="ref">A+B人選</th></tr></thead>
       <tbody>${frows}</tbody>
     </table></div></div>`;
-
-  // ④ 開始の内訳（当月に開始した人の応募月分布）
   const started=startedApplyPanel(o);
+  return `${summary}${selection}${funnel}${started}`;
+}
 
+/* ---- 詳細: 1オフィス分 ---- */
+function showDetail(i){
+  const o=DATA.offices[i];
   $("#detailView").innerHTML=`
     <button class="back" id="backBtn">← オフィス一覧に戻る</button>
     <div class="detail-head">
       <h2>${o.office}</h2>
       <span style="margin-left:auto;display:flex;gap:6px"><button id="prevO">‹ 前</button><button id="nextO">次 ›</button></span>
-    </div>
-    ${summary}${selection}${funnel}${started}`;
+    </div>${detailPanels(o)}`;
   $("#listView").classList.add("hidden");
   $("#detailView").classList.remove("hidden");
   $("#backBtn").addEventListener("click",showList);
   $("#prevO").addEventListener("click",()=>showDetail((i-1+DATA.offices.length)%DATA.offices.length));
   $("#nextO").addEventListener("click",()=>showDetail((i+1)%DATA.offices.length));
+  window.scrollTo(0,0);
+}
+
+/* ---- 詳細: エリア集計（小計行クリック） ---- */
+function officeAreaGroups(){
+  const offices=DATA.offices||[];
+  const g={}; offices.forEach(o=>{const a=o.area||"その他";(g[a]=g[a]||[]).push(o);});
+  const areas=Object.keys(g).sort((a,b)=>{const ia=AREA_ORDER.indexOf(a),ib=AREA_ORDER.indexOf(b);return (ia<0?99:ia)-(ib<0?99:ib);});
+  return areas.map(a=>({area:a,offices:g[a]}));
+}
+function aggArea(g){
+  const ov={newApplications:0,reApplications:0,phoneApplications:0,targetNew:0,forecast:0,contacts:0,newAB:0,reAB:0,setMonth:0,startedMonth:0};
+  const selection={A:0,B:0,C:0,other:0,unknown:0};
+  const zf=()=>({set:0,done:0,decided:0,started:0,ab:0});
+  const funnel={currentMonthNew:zf(),within2MonthsNew:zf(),reApplication:zf()};
+  const startedApply={},startedList=[];
+  (g.offices||[]).forEach(o=>{
+    Object.keys(ov).forEach(k=>ov[k]+=(o.overview[k]||0));
+    ["A","B","C","other","unknown"].forEach(k=>selection[k]+=(o.selection[k]||0));
+    ["currentMonthNew","within2MonthsNew","reApplication"].forEach(c=>["set","done","decided","started","ab"].forEach(k=>funnel[c][k]+=(((o.funnel||{})[c]||{})[k]||0)));
+    const sa=o.startedApply||{}; Object.keys(sa).forEach(mk=>{const src=sa[mk],t=(src&&typeof src==="object")?src:{total:src||0,new:0,re:0};const d=startedApply[mk]||(startedApply[mk]={total:0,new:0,re:0});d.total+=t.total||0;d.new+=t.new||0;d.re+=t.re||0;});
+    (o.startedList||[]).forEach(p=>startedList.push(p));
+  });
+  return {office:g.area,area:g.area,overview:ov,selection:selection,funnel:funnel,startedApply:startedApply,startedList:startedList};
+}
+function showAreaDetail(idx){
+  const groups=officeAreaGroups(); if(!groups.length) return;
+  idx=(idx+groups.length)%groups.length;
+  const g=groups[idx],o=aggArea(g);
+  $("#detailView").innerHTML=`
+    <button class="back" id="backBtn">← オフィス一覧に戻る</button>
+    <div class="detail-head">
+      <h2>${g.area}<span class="pref" style="margin-left:8px">エリア集計・${g.offices.length}オフィス</span></h2>
+      <span style="margin-left:auto;display:flex;gap:6px"><button id="prevO">‹ 前のエリア</button><button id="nextO">次のエリア ›</button></span>
+    </div>${detailPanels(o)}`;
+  $("#listView").classList.add("hidden");
+  $("#detailView").classList.remove("hidden");
+  $("#backBtn").addEventListener("click",showList);
+  $("#prevO").addEventListener("click",()=>showAreaDetail(idx-1));
+  $("#nextO").addEventListener("click",()=>showAreaDetail(idx+1));
   window.scrollTo(0,0);
 }
 
