@@ -968,7 +968,7 @@ $("#aggBtn").addEventListener("click",async()=>{
   btn.disabled=true; btn.textContent="集計中…";
   $("#updated").textContent="集計実行中…（稼働データを読み込むため30秒〜1分ほどかかります）";
   try{
-    const res=await fetch(`${API_URL}?run=aggregate&t=${Date.now()}`);
+    const res=await fetch(`${API_URL}?run=aggregate&month=${encodeURIComponent($("#monthSel").value)}&t=${Date.now()}`);
     const j=await res.json();
     if(!j.ok){ $("#updated").textContent="集計に失敗: "+(j.error||"unknown"); return; }
     await refresh(); // 最新サマリーを取得して再描画

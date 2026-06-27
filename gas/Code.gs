@@ -116,8 +116,8 @@ function doGet(e) {
     return ContentService.createTextOutput(buildSelectionCsv_())
       .setMimeType(ContentService.MimeType.CSV).downloadAsFile(fname);
   }
-  if (e && e.parameter && e.parameter.run === 'aggregate') { // 「集計実行」ボタン：①②③を突合してダッシュボード反映
-    try { const s = runDailyAggregation(); return jsonOut_({ ok: true, month: s.month, offices: s.offices.length, generatedAt: s.generatedAt }); }
+  if (e && e.parameter && e.parameter.run === 'aggregate') { // 「集計実行」ボタン：選択中の月で①②③を突合して反映
+    try { const s = runDailyAggregation(e.parameter.month || currentMonthKey_()); return jsonOut_({ ok: true, month: s.month, offices: s.offices.length, generatedAt: s.generatedAt }); }
     catch (err) { return jsonOut_({ ok: false, error: String(err) }); }
   }
   if (e && e.parameter && e.parameter.export === 'report') { // ①当月応募②開始内訳を集計シートへ出力
