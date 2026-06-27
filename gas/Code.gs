@@ -252,7 +252,7 @@ function runDailyAggregation(monthArg) {
       totalPhoneSet[x.phone] = true;
       x.first = !firstDateByPhone[x.phone];          // この電話の初回行か（=新規 / 以降=再応募）
       if (x.first) firstDateByPhone[x.phone] = x.d;
-      lastDateByPhone[x.phone] = x.d;                // 昇順走査なので最終的に最終応募日が残る
+      if (x.d <= range.monthEnd) lastDateByPhone[x.phone] = x.d; // 分析対象月の月末まで（未来の応募は無視＝開始月を限り）
     } else { x.first = true; }
     if (x.phone && /indeed/i.test(x.mediaRaw)) indeedPhones[x.phone] = true; // Indeed応募の電話を記録（人選側の名寄せ用）
   });
@@ -989,7 +989,8 @@ function fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, la
     const letter = judgeFromRow_(row);
     const ab = letter === 'A' || letter === 'B';
     const fd = firstDateByPhone[phone];
-    const ld = lastDateByPhone[phone] || ad; // 最後の応募日（総応募基準・無ければ稼働行の応募日）
+    let ld = lastDateByPhone[phone] || ad; // 最後の応募日（総応募基準・無ければ稼働行の応募日）
+    if (ld && ld.getTime() > range.monthEnd.getTime()) ld = range.monthEnd; // 開始月を限り：開始月より後（未来）の応募は無視
     const isRe = !!(fd && ld && ld.getTime() > fd.getTime()); // 最後の応募が初回より後＝再応募
 
     // 一覧の設定数/開始数 と ④開始の応募月分布（最後の応募月でバケット・新規/再は最後の応募基準）
