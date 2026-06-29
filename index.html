@@ -66,6 +66,9 @@
   tr.click-area{cursor:pointer}
   tr.click-area:hover td{background:#e3e8fb}
   tr.click td.office::after{content:"›";color:var(--muted);margin-left:8px;font-weight:700}
+  .pct{font-size:10px;font-weight:700;margin-left:3px;color:var(--muted)}
+  .pct.rate-up{color:#16a34a}
+  .pct.rate-dn{color:#dc2626}
 
   .bar{display:inline-flex;align-items:center;gap:7px;justify-content:flex-end;width:100%}
   .bar .track{flex:0 0 56px;height:7px;background:#eef0f6;border-radius:5px;overflow:hidden}
@@ -439,18 +442,32 @@ function renderChart(){
 
 /* ---- 一覧テーブル（人選数つき・クリックで詳細） ---- */
 const AREA_ORDER=["東北","関東","中日本","関西","九州"];
+const OFFICE_ORDER=["仙台","盛岡","青森","山形","新宿","千葉","横浜","高崎","名古屋","金沢","新潟","梅田","神戸","京都","福岡","鹿児島"];
 const shortOffice=n=>(n||"").replace(/オフィス$/,""); // 一覧の幅圧縮：末尾の「オフィス」を除去
+const officeOrderIdx=o=>{const i=OFFICE_ORDER.indexOf(shortOffice(o.office));return i<0?99:i;};
+const areaOrderIdx=a=>{const i=AREA_ORDER.indexOf(a);return i<0?99:i;};
+/* 指定の表示順（エリア→エリア内オフィス）に並べ替え */
+function sortOffices(list){return (list||[]).slice().sort((a,b)=>{const d=areaOrderIdx(a.area||"その他")-areaOrderIdx(b.area||"その他");return d||(officeOrderIdx(a)-officeOrderIdx(b));});}
+
+let NAT_RATES={contact:0,set:0,start:0}; // 全国平均率（%色付けの基準）
+/* 接触/設定/開始セル：値＋(率%)。率=値/ユニーク応募。全国平均より下＝赤 / 上＝緑 */
+function rateCell(val,denom,nat){
+  val=val||0;
+  if(!denom){ return `<td>${num(val)}</td>`; }
+  const r=val/denom, cls=r<nat?"rate-dn":(r>nat?"rate-up":"");
+  return `<td>${num(val)}<span class="pct ${cls}">(${Math.round(r*100)}%)</span></td>`;
+}
 /* オフィス1件ぶんの数値セル（行/小計/合計で共通） */
 function officeCells(v,sel){
   const rate=v.targetNew?Math.min(999,Math.round(v.forecast/v.targetNew*100)):0;
-  const ou=(sel.other||0)+(sel.unknown||0);
+  const ou=(sel.other||0)+(sel.unknown||0), denom=v.uniqueApplicants||0;
   return `<td>${num(v.newApplications)}</td><td>${num(v.reApplications)}</td><td>${num(v.targetNew)}</td>`+
     `<td>${meter(rate)}</td>`+
     `<td><span class="pill ${v.forecast>=v.targetNew?'up':'down'}">${num(v.forecast)}</span></td>`+
     `<td>${num(sel.A||0)}</td><td>${num(sel.B||0)}</td><td class="refcol">${num((sel.A||0)+(sel.B||0))}</td><td>${num(sel.C||0)}</td><td>${num(ou)}</td>`+
-    `<td>${num(v.contacts)}</td><td>${num(v.setMonth||0)}</td><td>${num(v.startedMonth||0)}</td>`;
+    rateCell(v.contacts,denom,NAT_RATES.contact)+rateCell(v.setMonth,denom,NAT_RATES.set)+rateCell(v.startedMonth,denom,NAT_RATES.start);
 }
-function sumOv(list){const ks=["newApplications","reApplications","targetNew","forecast","contacts","setMonth","startedMonth"];const r={};ks.forEach(k=>r[k]=list.reduce((a,o)=>a+(o.overview[k]||0),0));return r;}
+function sumOv(list){const ks=["newApplications","reApplications","targetNew","forecast","contacts","setMonth","startedMonth","uniqueApplicants"];const r={};ks.forEach(k=>r[k]=list.reduce((a,o)=>a+(o.overview[k]||0),0));return r;}
 function sumSel(list){const r={A:0,B:0,C:0,other:0,unknown:0};list.forEach(o=>["A","B","C","other","unknown"].forEach(k=>r[k]+=(o.selection[k]||0)));return r;}
 
 /* 前日の未登録者アラート（総応募にあって稼働データに電話が無い人） */
@@ -483,6 +500,9 @@ function renderList(){
   renderUnregistered();
   renderKpis(); renderChart();
   const offices=DATA.offices;
+  // 全国平均率（接触/設定/開始 ÷ ユニーク応募）。各オフィスの色付け基準。
+  const tot=sumOv(offices), du=tot.uniqueApplicants||0;
+  NAT_RATES={contact:du?tot.contacts/du:0, set:du?tot.setMonth/du:0, start:du?tot.startedMonth/du:0};
   // エリアでグループ化（割当順は AREA_ORDER、未定義は末尾）
   const groups={}; offices.forEach((o,i)=>{const a=o.area||"その他";(groups[a]=groups[a]||[]).push(i);});
   const areas=Object.keys(groups).sort((a,b)=>{const ia=AREA_ORDER.indexOf(a),ib=AREA_ORDER.indexOf(b);return (ia<0?99:ia)-(ib<0?99:ib);});
@@ -945,6 +965,7 @@ function activeSection(){
 }
 function render(){
   if(!DATA.daily||!DATA.daily.length) DATA.daily=genDaily(DATA.month); // モック補完
+  if(DATA.offices) DATA.offices=sortOffices(DATA.offices); // 指定の表示順に並べ替え
   SECTION_RENDERED={};                 // 新しいデータ → 全セクションを再描画対象に
   const a=activeSection();
   ensureSection(a);                    // 表示中のセクションだけ即描画（他は切替時に描画）

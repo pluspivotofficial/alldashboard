@@ -259,8 +259,10 @@ function runDailyAggregation(monthArg) {
 
   // --- ① 総応募: 当月の新規/再応募・日次（再応募も電話ユニーク） ---
   const reUniqByOffice = {};
+  const uniqApplyByOffice = {};   // office → Set(電話)：当月のユニーク応募者（接触/設定/開始の%分母）
   parsed.forEach(x => {
     if (!x.office || !acc[x.office] || !inRange_(x.d, range.monthStart, range.monthEnd)) return;
+    if (x.phone) (uniqApplyByOffice[x.office] || (uniqApplyByOffice[x.office] = new Set())).add(x.phone);
     const key = fmtDate_(x.d);
     const mo = macc_(x.media, x.office);
     if (x.first) {                                    // 初回=新規（電話ユニーク）
@@ -324,6 +326,7 @@ function runDailyAggregation(monthArg) {
         const dm = dailyMap[fmtDate_(d)] || (dailyMap[fmtDate_(d)] = { new: 0, re: 0, phone: 0, ab: 0 }); // 日次グラフに電話応募を加算
         dm.phone += 1; if (ab) dm.ab += 1;
         if (qsub) { qsub.overview.phoneApplications += 1; qsub.overview.newApplications += 1; }
+        (uniqApplyByOffice[office] || (uniqApplyByOffice[office] = new Set())).add(phone); // 電話応募もユニーク応募者に含める
       }
     }
 
@@ -401,10 +404,12 @@ function runDailyAggregation(monthArg) {
 
   // --- 仕上げ ---
   const elapsed = elapsedDays_(month), totalDays = daysInMonth_(month);
-  Object.values(acc).forEach(o => {
+  Object.keys(acc).forEach(key => {
+    const o = acc[key];
     o.overview.forecast = elapsed > 0
       ? Math.round(o.overview.newApplications / elapsed * totalDays)
       : o.overview.newApplications;
+    o.overview.uniqueApplicants = (uniqApplyByOffice[key] || new Set()).size; // 当月ユニーク応募者（%分母）
     Object.values(o.funnel).forEach(f => { f.ab = f._abPhones.size; delete f._abPhones; });
   });
 
@@ -763,7 +768,7 @@ function newOfficeAcc_(office, prefs, target, area) {
     office: office,
     prefectures: prefs,
     area: area || '',
-    overview: { newApplications: 0, phoneApplications: 0, reApplications: 0, targetNew: target, forecast: 0, contacts: 0, newAB: 0, reAB: 0, setMonth: 0, startedMonth: 0 },
+    overview: { newApplications: 0, phoneApplications: 0, reApplications: 0, targetNew: target, forecast: 0, contacts: 0, newAB: 0, reAB: 0, setMonth: 0, startedMonth: 0, uniqueApplicants: 0 },
     selection: { A: 0, B: 0, C: 0, other: 0, unknown: 0 },
     funnel: { currentMonthNew: fnl(), within2MonthsNew: fnl(), reApplication: fnl() },
     bySelection: { A: { new: 0, re: 0, started: 0 }, B: { new: 0, re: 0, started: 0 }, C: { new: 0, re: 0, started: 0 }, ou: { new: 0, re: 0, started: 0 } },
