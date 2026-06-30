@@ -151,6 +151,12 @@ function doPost(e) {
       return jsonOut_({ ok: true, mode: 'senbatsu', rows: result.rows, tally: result.tally });
     }
 
+    // ②' type=reapply … 当月再応募データCSV。当月再応募シートへ丸ごと置換（再応募者の人選/歩留/開始の正データ）。
+    if (p.type === 'reapply') {
+      const rows = writeReapplySheet_(csv);
+      return jsonOut_({ ok: true, mode: 'reapply', rows: rows });
+    }
+
     // ① 既定 … 総応募CSV。TOTAL_FOLDERへ保存(ステージング)のみ。反映は④集計実行（ボタン/7:30トリガー）で行う。
     const name = '応募データ統合_' + Utilities.formatDate(new Date(), CONFIG.TZ, 'yyyyMMdd_HHmmss') + '.csv';
     DriveApp.getFolderById(CONFIG.TOTAL_FOLDER_ID).createFile(name, csv, 'text/csv');
@@ -259,6 +265,7 @@ function runDailyAggregation(monthArg) {
 
   // --- ① 総応募: 当月の新規/再応募・日次（再応募も電話ユニーク） ---
   const reUniqByOffice = {};
+  const reInfoByPhone = {};       // 再応募者の基本情報（再応募データ欠損一覧用）
   const uniqApplyByOffice = {};   // office → Set(電話)：当月のユニーク応募者（接触/設定/開始の%分母）
   parsed.forEach(x => {
     if (!x.office || !acc[x.office] || !inRange_(x.d, range.monthStart, range.monthEnd)) return;
@@ -270,16 +277,17 @@ function runDailyAggregation(monthArg) {
       mo.overview.newApplications += 1;
       md_(x.media, key).new += 1;
       if (isAB(x.phone)) { acc[x.office].overview.newAB += 1; mo.overview.newAB += 1; md_(x.media, key).ab += 1; }
-    } else {                                          // 2回目以降=再応募（件数は応募ごとに生カウント・月内ユニーク化しない）
-      acc[x.office].overview.reApplications += 1;
-      mo.overview.reApplications += 1;
-      rePhoneInMonth[x.phone] = true;                 // 当月の再応募者（歩留の再応募コホート等で使用）
-      md_(x.media, key).re += 1;                      // 媒体日次も生カウント
-      // A+B人選は人単位（ユニーク）。オフィスで初回の再応募時に1回だけ、その媒体に計上する。
+    } else {                                          // 2回目以降=再応募（件数は電話ユニーク＝人単位）
+      rePhoneInMonth[x.phone] = true;                 // 当月の再応募者（歩留・再応募データ突合に使用）
+      md_(x.media, key).re += 1;                      // 媒体日次は生カウント
+      // 件数・A+B人選は人単位（ユニーク）。オフィスで初回の再応募時に1回だけ計上。
       const set = reUniqByOffice[x.office] || (reUniqByOffice[x.office] = new Set());
       if (!set.has(x.phone)) {
         set.add(x.phone);
+        acc[x.office].overview.reApplications += 1;
+        mo.overview.reApplications += 1;
         if (isAB(x.phone)) { acc[x.office].overview.reAB += 1; mo.overview.reAB += 1; }
+        reInfoByPhone[x.phone] = { name: x.name || '', phone: x.phoneRaw || x.phone, media: x.media || '', office: x.office, date: fmtDate_(x.d) };
       }
     }
     // キューメイトのサブ内訳（Indeed / その他）: 新規/再応募の件数
@@ -383,11 +391,33 @@ function runDailyAggregation(monthArg) {
     });
   });
 
+  // 当月再応募データ(_7): 再応募者の人選/歩留/開始の正データ。当月の再応募(再応募日が当月)のみを電話キーで保持。
+  const reapplyByPhone = {};
+  readReapplyRows_().forEach(row => {
+    if (!inRange_(parseDate_(row[REI.reapplyDate]), range.monthStart, range.monthEnd)) return;
+    const ph = normPhone_(row[REI.phone]);
+    if (ph) reapplyByPhone[ph] = row;
+  });
+  const hasReapply = Object.keys(reapplyByPhone).length > 0; // _7がある時のみ再応募を_7基準に切替
+
   // 設定数/開始数・④開始の応募月分布(新規/再応募)・オフィス別の歩留(③)は「稼働データ(全期間)」基準で集計。
-  // 当月人選シートは当月応募しか載らないため、前月以前に応募して当月に設定/開始した人を取りこぼす。
+  // _7がある場合は当月再応募者を稼働データ側でスキップ（_7基準で別途集計＝二重計上防止）。
   const mcgPhoneSet = new Set(); // 稼働データ(②)に存在する電話 → 未登録者の割り出しに使う
-  try { fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, lastDateByPhone, mcgPhoneSet); }
+  try { fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, lastDateByPhone, mcgPhoneSet, hasReapply ? rePhoneInMonth : null); }
   catch (e) { Logger.log('activity-from-history skipped: ' + e); }
+
+  // 再応募者(_7)を集計に反映（人選/接触/歩留/開始/名簿）
+  try { processReapplicants_(acc, reapplyByPhone, prefToOffice, range); }
+  catch (e) { Logger.log('reapply process skipped: ' + e); }
+
+  // 再応募データ欠損：総応募で当月再応募ありだが _7 に無い人（オフィス別詳細に一覧表示）
+  const reMissing = {};
+  Object.keys(reInfoByPhone).forEach(phone => {
+    if (reapplyByPhone[phone]) return;
+    const info = reInfoByPhone[phone];
+    (reMissing[info.office] || (reMissing[info.office] = [])).push({ name: info.name, phone: info.phone, media: info.media, date: info.date });
+  });
+  Object.keys(acc).forEach(o => { acc[o].reapplyMissing = reMissing[o] || []; });
 
   // 前日(最新応募日)の未登録者＝総応募にあって稼働データに電話が無い応募者
   const unregistered = computeUnregistered_(parsed, mcgPhoneSet);
@@ -725,6 +755,44 @@ function readSenbatsuRows_() {
   return vals.length < 2 ? [] : vals.slice(1);
 }
 
+// 当月再応募データの保存先シート（初回は自動生成し、IDをScriptPropertiesに保持）。列はMCGI＋再応募日(38)。
+const REI = { applyDate: 0, phone: 3, age: 4, pref: 6, media: 8, contactStatus: 9, qual: 17, exp: 19, workdays: 22, setNew: 24, doneNew: 25, decNew: 26, startNew: 27, status: 29, reapplyDate: 38, name: 1 };
+function getReapplySheet_() {
+  const props = PropertiesService.getScriptProperties();
+  let id = props.getProperty('REAPPLY_SHEET_ID'), ss = null;
+  if (id) { try { ss = SpreadsheetApp.openById(id); } catch (e) { id = null; } }
+  if (!ss) {
+    ss = SpreadsheetApp.create('当月再応募データ');
+    id = ss.getId();
+    try { DriveApp.getFileById(id).moveTo(DriveApp.getFolderById(CONFIG.OUTPUT_FOLDER_ID)); } catch (e) { Logger.log('reapply move skipped: ' + e); }
+    props.setProperty('REAPPLY_SHEET_ID', id);
+    Logger.log('当月再応募データ シート生成: ' + id);
+  }
+  return ss.getSheets()[0];
+}
+// 当月再応募CSV本文を「当月再応募シート」へ丸ごと置換（全列保持）。戻り値=データ行数。
+function writeReapplySheet_(csvText) {
+  const data = Utilities.parseCsv((csvText || '').replace(/^﻿/, ''));
+  const out = data.filter(r => r && r.some(c => (c || '').toString().trim()));
+  const W = out.reduce((w, r) => Math.max(w, r.length), 1);
+  const norm = out.map(r => { const c = r.slice(); while (c.length < W) c.push(''); return c; });
+  const sh = getReapplySheet_();
+  sh.clearContents();
+  if (norm.length) sh.getRange(1, 1, norm.length, W).setValues(norm);
+  Logger.log('当月再応募シート置換: %s 行', norm.length - 1);
+  return Math.max(0, norm.length - 1);
+}
+// 集計用に当月再応募シートを行配列（ヘッダー除く）で返す。未生成なら空。
+function readReapplyRows_() {
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty('REAPPLY_SHEET_ID');
+  if (!id) return [];
+  try {
+    const vals = SpreadsheetApp.openById(id).getSheets()[0].getDataRange().getValues();
+    return vals.length < 2 ? [] : vals.slice(1);
+  } catch (e) { Logger.log('readReapply skipped: ' + e); return []; }
+}
+
 // 人選CSV本文を 1NsC65W形式（先頭28列＋人選ｽﾃｰﾀｽ）へ整形し、人選ｽﾃｰﾀｽを4条件で算出して丸ごと置き換える。
 // 戻り値 { rows, tally } … tally=1次判定の内訳 {A,B,C,other:{total,added}}。added=前回取り込みに無かった電話番号の件数。
 function writeSenbatsuSheet_(csvText) {
@@ -976,7 +1044,53 @@ function readLatestCsvMatrix_(folderId, charset) {
 //   ・当月開始者の応募月(yyyy-MM)分布（新規/再応募つき, ④）
 //   ・歩留(③)＝コホート(最後の応募日＋新規/再で判定)×各ステージの当月件数 ＋ A+B参考
 // を集計して acc に書き込む。新規/再応募は「最後の応募日」基準（lastDateByPhone>firstDateByPhone＝再応募）。
-function fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, lastDateByPhone, mcgPhoneSet) {
+// 当月再応募データ(_7)から、各オフィスの再応募者の 人選(②)・接触・歩留(③再応募コホート)・開始(④)・名簿・人選別 を集計。
+// 列レイアウトは人選シートと同一（MCGI準拠）。④の応募月は「元の応募日(列0)」でバケット、新規/再は全て「再」。
+function processReapplicants_(acc, reapplyByPhone, prefToOffice, range) {
+  Object.keys(reapplyByPhone).forEach(phone => {
+    const row = reapplyByPhone[phone];
+    const office = prefToOffice[(row[REI.pref] || '').toString().trim()];
+    if (!office || !acc[office]) return;
+    const o = acc[office];
+    const letter = judgeFromRow_(row);
+    const ab = letter === 'A' || letter === 'B';
+    bumpSelection_(o.selection, letter);                                  // ②人選判定
+    if ((row[REI.contactStatus] || '').toString().trim().indexOf(CONTACT_PREFIX) === 0) o.overview.contacts += 1; // 接触数
+    if (inRange_(parseDate_(row[MCGI.setNew]), range.monthStart, range.monthEnd)) o.overview.setMonth += 1;       // 設定数
+    const f = o.funnel.reApplication;                                     // ③歩留 再応募コホート
+    FUNNEL_STAGES.forEach(([outKey, idxKey]) => {
+      if (inRange_(parseDate_(row[MCGI[idxKey]]), range.monthStart, range.monthEnd)) f[outKey] += 1;
+    });
+    if (ab && phone) f._abPhones.add(phone);
+    const g = (letter === 'A' || letter === 'B' || letter === 'C') ? letter : 'ou';
+    const bs = o.bySelection[g]; bs.re += 1;
+    const startD = parseDate_(row[MCGI.startNew]);
+    const startIn = inRange_(startD, range.monthStart, range.monthEnd);
+    if (startIn) {                                                        // 開始（④分布＋名簿＋報告②＋稼働率）
+      o.overview.startedMonth += 1; bs.started += 1; o.report2.re += 1;
+      const ad = parseDate_(row[REI.applyDate]);
+      const k = ad ? Utilities.formatDate(ad, CONFIG.TZ, 'yyyy-MM') : '不明';
+      const b = o.startedApply[k] || (o.startedApply[k] = { total: 0, new: 0, re: 0 });
+      b.total += 1; b.re += 1;
+      o.startedList.push({ name: (row[REI.name] || '').toString().trim(), applyDate: ad ? fmtDate_(ad) : '', startDate: fmtDate_(startD), grade: letter, newRe: 're', media: normMedia_(row[REI.media]) });
+    }
+    if (g !== 'ou') {                                                     // 人選別 応募者明細（A/B/C）
+      const qual = (row[MCGI.qual] || '').toString().indexOf('有資格') >= 0;
+      const exp = (row[MCGI.exp] || '').toString().trim() === '有';
+      const wd = (row[MCGI.workdays] || '').toString().indexOf('LT') >= 0;
+      const ageOk = !(Number(row[MCGI.age]) >= 60);
+      o.applicants.push({
+        name: (row[REI.name] || '').toString().trim(), phone: (row[REI.phone] || '').toString().trim(),
+        age: row[REI.age], pref: (row[REI.pref] || '').toString().trim(), media: normMedia_(row[REI.media]),
+        grade: g, newRe: 're', started: startIn, startDate: startIn ? fmtDate_(startD) : '',
+        contact: (row[REI.contactStatus] || '').toString().replace(/\s+/g, ' ').trim(),
+        qual: qual, exp: exp, wd: wd, ageOk: ageOk,
+      });
+    }
+  });
+}
+
+function fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, lastDateByPhone, mcgPhoneSet, reSkipPhones) {
   firstDateByPhone = firstDateByPhone || {};
   lastDateByPhone = lastDateByPhone || {};
   const curKey = Utilities.formatDate(range.monthStart, CONFIG.TZ, 'yyyy-MM');     // 当月
@@ -989,6 +1103,7 @@ function fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, la
     const office = prefToOffice[(row[MCGI.pref] || '').toString().trim()];
     if (!office || !acc[office]) return;
     const phone = normPhone_(row[MCGI.phone]);
+    if (reSkipPhones && phone && reSkipPhones[phone]) return; // 当月再応募者は_7基準で集計するため稼働データ側はスキップ
     const ad = parseDate_(row[MCGI.applyDate]);
     if (ad) { if (!minA || ad < minA) minA = ad; if (!maxA || ad > maxA) maxA = ad; }
     const letter = judgeFromRow_(row);

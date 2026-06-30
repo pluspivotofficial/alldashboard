@@ -556,7 +556,18 @@ function detailPanels(o){
       <tbody>${frows}</tbody>
     </table></div></div>`;
   const started=startedApplyPanel(o);
-  return `${summary}${selection}${funnel}${started}`;
+  return `${summary}${selection}${funnel}${started}${reapplyMissingPanel(o)}`;
+}
+/* 再応募データ未取得：総応募で当月再応募ありだが再応募データ(_7)に無い人 */
+function reapplyMissingPanel(o){
+  const list=o.reapplyMissing||[];
+  if(!list.length) return "";
+  const rows=list.map(p=>`<tr><td class="l">${p.name||"-"}</td><td>${p.phone||"-"}</td><td>${p.date||"-"}</td><td>${p.media||"-"}</td></tr>`).join("");
+  return `<div class="panel"><div class="panel-head"><h2>⚠️ 再応募データ未取得</h2><span class="hint">総応募で当月再応募だが再応募データに該当なし ${num(list.length)}名</span></div>
+    <div class="scroll"><table>
+      <thead><tr><th class="l">氏名</th><th>電話番号</th><th>再応募日</th><th>媒体</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div></div>`;
 }
 
 /* ---- 詳細: 1オフィス分 ---- */
@@ -588,15 +599,16 @@ function aggArea(g){
   const selection={A:0,B:0,C:0,other:0,unknown:0};
   const zf=()=>({set:0,done:0,decided:0,started:0,ab:0});
   const funnel={currentMonthNew:zf(),within2MonthsNew:zf(),reApplication:zf()};
-  const startedApply={},startedList=[];
+  const startedApply={},startedList=[],reapplyMissing=[];
   (g.offices||[]).forEach(o=>{
     Object.keys(ov).forEach(k=>ov[k]+=(o.overview[k]||0));
     ["A","B","C","other","unknown"].forEach(k=>selection[k]+=(o.selection[k]||0));
     ["currentMonthNew","within2MonthsNew","reApplication"].forEach(c=>["set","done","decided","started","ab"].forEach(k=>funnel[c][k]+=(((o.funnel||{})[c]||{})[k]||0)));
     const sa=o.startedApply||{}; Object.keys(sa).forEach(mk=>{const src=sa[mk],t=(src&&typeof src==="object")?src:{total:src||0,new:0,re:0};const d=startedApply[mk]||(startedApply[mk]={total:0,new:0,re:0});d.total+=t.total||0;d.new+=t.new||0;d.re+=t.re||0;});
     (o.startedList||[]).forEach(p=>startedList.push(p));
+    (o.reapplyMissing||[]).forEach(p=>reapplyMissing.push(p));
   });
-  return {office:g.area,area:g.area,overview:ov,selection:selection,funnel:funnel,startedApply:startedApply,startedList:startedList};
+  return {office:g.area,area:g.area,overview:ov,selection:selection,funnel:funnel,startedApply:startedApply,startedList:startedList,reapplyMissing:reapplyMissing};
 }
 function showAreaDetail(idx){
   const groups=officeAreaGroups(); if(!groups.length) return;

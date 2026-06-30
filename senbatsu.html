@@ -41,16 +41,26 @@
 </div>
 <div class="container">
   <div class="card">
-    <h2>📁 人選CSVを選択</h2>
+    <h2>📁 ① 当月応募データ（人選CSV）</h2>
     <div class="drop" id="drop" onclick="document.getElementById('file').click()">
       <div style="font-size:30px">📄</div>
       <strong>クリックまたはドラッグ＆ドロップ</strong>
       <p>「当月人選データ」と同じ項目のCSV（Shift-JIS / UTF-8 どちらも可）</p>
       <input type="file" id="file" accept=".csv">
     </div>
+    <span id="fileName" class="muted"></span>
+
+    <h2 style="margin-top:18px">📁 ② 当月再応募データ（任意）</h2>
+    <div class="drop" id="drop2" onclick="document.getElementById('file2').click()">
+      <div style="font-size:30px">🔁</div>
+      <strong>クリックまたはドラッグ＆ドロップ</strong>
+      <p>「当月再応募データ」CSV（再応募者の人選/歩留/開始。無ければ省略可）</p>
+      <input type="file" id="file2" accept=".csv">
+    </div>
+    <span id="fileName2" class="muted"></span>
+
     <div class="row">
       <button class="btn" id="send" disabled onclick="upload()">☁️ 取り込んで人選判定</button>
-      <span id="fileName" class="muted"></span>
     </div>
     <div class="status" id="status"></div>
   </div>
@@ -69,7 +79,8 @@
 const GAS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbyAmjJUK96m_d7b45mZHrnQRhr8dL3470FRNAobEo62TlTBrpfe0uOgEN0GWmGD3j8/exec';
 const UPLOAD_TOKEN = 'NMrci23nQlpFLFSpAQb3113A';
 
-let csvText = '';
+let csvText = '';   // ① 応募データ
+let csvText2 = '';  // ② 再応募データ（任意）
 const $ = id => document.getElementById(id);
 
 // Shift-JIS優先で読み、文字化けが多ければUTF-8で読み直す
@@ -92,24 +103,33 @@ async function handleFile(file) {
   if (!file || !file.name.toLowerCase().endsWith('.csv')) { alert('CSVファイルを選択してください'); return; }
   csvText = await readCsv(file);
   const lines = (csvText.match(/\n/g) || []).length;
-  $('fileName').textContent = `📄 ${file.name}（約${Math.max(0, lines - 1)}行）`;
+  $('fileName').textContent = `📄 ① ${file.name}（約${Math.max(0, lines - 1)}行）`;
   $('send').disabled = false;
   $('status').textContent = '';
 }
+async function handleFile2(file) {
+  if (!file || !file.name.toLowerCase().endsWith('.csv')) { alert('CSVファイルを選択してください'); return; }
+  csvText2 = await readCsv(file);
+  const lines = (csvText2.match(/\n/g) || []).length;
+  $('fileName2').textContent = `🔁 ② ${file.name}（約${Math.max(0, lines - 1)}行）`;
+}
 
+async function post(type, csv) {
+  const res = await fetch(GAS_ENDPOINT, { method: 'POST', body: new URLSearchParams({ token: UPLOAD_TOKEN, type, csv }) });
+  return res.json();
+}
 async function upload() {
-  if (!csvText) { alert('先にCSVを選択してください'); return; }
+  if (!csvText) { alert('先に①当月応募データを選択してください'); return; }
   $('send').disabled = true;
-  $('status').textContent = '⏳ 取り込み中…（判定・反映まで20秒ほどかかります）';
+  $('status').textContent = '⏳ 取り込み中…（判定まで20秒ほどかかります）';
   try {
-    const res = await fetch(GAS_ENDPOINT, {
-      method: 'POST',
-      body: new URLSearchParams({ token: UPLOAD_TOKEN, type: 'senbatsu', csv: csvText }),
-    });
-    const j = await res.json();
+    const j = await post('senbatsu', csvText);
+    let re = null;
+    if (csvText2) { try { re = await post('reapply', csvText2); } catch (e) { re = { ok: false, error: String(e) }; } }
     if (j.ok) {
+      const reMsg = csvText2 ? (re && re.ok ? `／再応募データ ${re.rows}件を取込` : `／再応募データの取込に失敗: ${re && re.error}`) : '';
       $('status').innerHTML =
-        `<div>✅ 人選シートを更新しました（${j.rows}件）。<b>稼働データ投入後、ダッシュボードの「🔄 集計実行」</b>で反映してください。</div>`
+        `<div>✅ 人選シートを更新しました（${j.rows}件）${reMsg}。<b>稼働データ投入後、ダッシュボードの「🔄 集計実行」</b>で反映してください。</div>`
         + renderTally(j.tally);
     } else {
       $('status').textContent = '⚠️ 失敗: ' + (j.error || 'unknown');
@@ -135,10 +155,10 @@ function renderTally(t) {
 }
 
 $('file').addEventListener('change', e => handleFile(e.target.files[0]));
-const d = $('drop');
-d.addEventListener('dragover', e => { e.preventDefault(); d.style.background = '#eff6ff'; });
-d.addEventListener('dragleave', () => { d.style.background = ''; });
-d.addEventListener('drop', e => { e.preventDefault(); d.style.background = ''; handleFile(e.dataTransfer.files[0]); });
+$('file2').addEventListener('change', e => handleFile2(e.target.files[0]));
+function wireDrop(el, fn){ el.addEventListener('dragover', e => { e.preventDefault(); el.style.background = '#eff6ff'; }); el.addEventListener('dragleave', () => { el.style.background = ''; }); el.addEventListener('drop', e => { e.preventDefault(); el.style.background = ''; fn(e.dataTransfer.files[0]); }); }
+wireDrop($('drop'), handleFile);
+wireDrop($('drop2'), handleFile2);
 </script>
 </body>
 </html>
