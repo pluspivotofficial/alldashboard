@@ -173,6 +173,7 @@
     <button class="nav-item" id="navMedia" data-sec="media">📣 媒体別</button>
     <button class="nav-item" id="navSel" data-sec="selection">👥 人選別</button>
     <button class="nav-item" id="navAna" data-sec="analysis">📈 分析</button>
+    <button class="nav-item" id="navSim" data-sec="simulation">🎯 シミュレーション</button>
   </aside>
   <div class="main"><div class="wrap">
   <header class="top">
@@ -236,6 +237,11 @@
   <!-- ===== 分析セクション ===== -->
   <div id="analysisSection" class="hidden">
     <div id="analysisView"></div>
+  </div>
+
+  <!-- ===== シミュレーションセクション ===== -->
+  <div id="simulationSection" class="hidden">
+    <div id="simulationView"></div>
   </div>
 
   <p class="updated" id="updated"></p>
@@ -937,20 +943,163 @@ function renderAnalysis(){
     `<p class="updated">分析生成: ${new Date(a.generatedAt).toLocaleString("ja-JP")}（履歴 ${num(a.records)}件）</p>`;
 }
 
+/* ===== シミュレーション（経路別 必要応募数・予算の逆算） ===== */
+/* SIM.months: 直近2ヶ月分の経路別実績（新規/再応募/DB）。target: 目標開始数（入力値を保持） */
+let SIM={loading:false, loaded:null, months:[], error:null, target:null};
+function simPrevMonth(m){
+  const p=m.split("-").map(Number);
+  const d=new Date(p[0], p[1]-2, 1);   // 1ヶ月前（month は1始まり→-2）
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");
+}
+/* 1ヶ月のサマリーJSON → 全国の経路別合計 */
+function simTotalsFromSummary(j){
+  let newStart=0, reStart=0, dbStart=0, newApps=0, reApps=0, started=0, budget=0;
+  (j.offices||[]).forEach(o=>{
+    const r=o.report2||{curNew:0,prevNew:0,re:0,db:0}, v=o.overview||{};
+    newStart += (r.curNew||0)+(r.prevNew||0);   // 新規経由＝当月内純新規＋前月純新規
+    reStart  += (r.re||0);                       // 再応募経由
+    dbStart  += (r.db||0);                       // DB経由（その他）
+    newApps  += v.newApplications||0;
+    reApps   += v.reApplications||0;
+    started  += v.startedMonth||0;
+  });
+  (j.media||[]).forEach(m=>{ budget += (m.overview&&m.overview.budget)||0; });  // 広告予算合計（新規経由のみに紐づく）
+  return {month:j.month, newStart, reStart, dbStart, newApps, reApps, started, budget};
+}
+async function loadSimulation(force){
+  const cur=$("#monthSel").value;
+  if(SIM.loaded===cur && !force) return SIM;
+  if(!API_URL){ SIM.error="API未設定"; return SIM; }
+  SIM.loading=true; SIM.error=null;
+  const wanted=[cur, simPrevMonth(cur)];
+  const months=[];
+  for(const m of wanted){
+    try{ months.push(simTotalsFromSummary(await loadFromApi(m))); }
+    catch(e){ /* その月のデータが無い場合はスキップ */ }
+  }
+  SIM.months=months; SIM.loaded=cur; SIM.loading=false;
+  if(!months.length) SIM.error="対象月の実績データが取得できませんでした";
+  return SIM;
+}
+/* 直近2ヶ月を合算し、経路別の構成比・開始率・CPAを算出 */
+function simBasis(){
+  const ks=["newStart","reStart","dbStart","newApps","reApps","budget","started"];
+  const a={}; ks.forEach(k=>a[k]=0);
+  SIM.months.forEach(t=>ks.forEach(k=>a[k]+=t[k]||0));
+  const totalStart=a.newStart+a.reStart+a.dbStart;
+  return {
+    months:SIM.months, totalStart, agg:a,
+    mixNew: totalStart? a.newStart/totalStart : 0,
+    mixRe:  totalStart? a.reStart /totalStart : 0,
+    mixDb:  totalStart? a.dbStart /totalStart : 0,
+    rateNew: a.newApps? a.newStart/a.newApps : 0,   // 開始率＝開始/応募
+    rateRe:  a.reApps ? a.reStart /a.reApps  : 0,
+    cpaNew:  a.newApps? a.budget  /a.newApps : 0,    // 新規CPA＝広告予算/新規応募
+  };
+}
+const pct1 = r => (r==null||!isFinite(r)) ? "–" : (Math.round(r*1000)/10)+"%";
+/* 目標開始数 → 経路別 必要開始数・必要応募数・必要予算 */
+function simCompute(b, target){
+  const row=(label, mix, rate, cpa, hasApp)=>{
+    const start=target*mix;
+    const apps =hasApp&&rate? start/rate : null;
+    const bud  =hasApp&&apps!=null? apps*cpa : null;
+    return {label, mix, start, apps, rate:hasApp?rate:null, cpa:hasApp?cpa:null, budget:bud, hasApp};
+  };
+  const rows=[
+    row("新規経由", b.mixNew, b.rateNew, b.cpaNew, true),
+    row("再応募経由", b.mixRe, b.rateRe, 0, true),
+    row("DB経由", b.mixDb, 0, 0, false),
+  ];
+  const totBudget=rows.reduce((s,r)=>s+(r.budget||0),0);
+  const totApps  =rows.reduce((s,r)=>s+(r.apps||0),0);
+  return {rows, totBudget, totApps};
+}
+function renderSimulation(){
+  const view=$("#simulationView");
+  if(SIM.loading || (!SIM.months.length && !SIM.error)){
+    view.innerHTML=`<div class="panel"><div style="padding:20px;color:var(--muted)">読み込み中…</div></div>`; return;
+  }
+  if(SIM.error || !SIM.months.length){
+    view.innerHTML=`<div class="panel"><div class="panel-head"><h2>シミュレーション</h2></div><div style="padding:16px;color:var(--muted)">実績データが取得できません。対象月の「🔄 集計実行」後にお試しください。<br><span style="font-size:11px">(${SIM.error||"データなし"})</span></div></div>`; return;
+  }
+  const b=simBasis();
+  const mLabels=SIM.months.map(m=>m.month).join("・");
+  const a=b.agg;
+  /* 既定の目標開始数：直近実績の月平均（10単位で丸め） */
+  if(SIM.target==null){ const avg=b.totalStart/SIM.months.length; SIM.target=Math.max(10, Math.round(avg/10)*10); }
+
+  /* ① 実績パネル（経路別 開始/応募/開始率/CPA/構成比） */
+  const actRow=(label, start, apps, rate, cpav, mix, appTxt)=>`<tr>
+    <td class="l">${label}</td><td>${num(Math.round(start))}</td><td>${appTxt!=null?appTxt:num(Math.round(apps))}</td>
+    <td>${rate!=null?pct1(rate):"–"}</td><td>${cpav!=null?(cpav?yen(cpav):"–"):"–"}</td><td>${pct1(mix)}</td></tr>`;
+  const actual=`<div class="panel">
+    <div class="panel-head"><h2>① 直近実績（経路別）</h2><span class="hint">対象: ${mLabels}／${SIM.months.length}ヶ月合算</span></div>
+    <div class="scroll"><table>
+      <thead><tr><th class="l">経路</th><th>開始数</th><th>応募数</th><th>開始率</th><th>CPA</th><th>構成比</th></tr></thead>
+      <tbody>
+        ${actRow("新規経由", a.newStart, a.newApps, b.rateNew, b.cpaNew, b.mixNew)}
+        ${actRow("再応募経由", a.reStart, a.reApps, b.rateRe, 0, b.mixRe)}
+        ${actRow("DB経由", a.dbStart, 0, null, null, b.mixDb, "—")}
+      </tbody>
+      <tfoot><tr><td class="l">合計</td><td>${num(b.totalStart)}</td><td>${num(a.newApps+a.reApps)}</td><td>–</td><td>${yen(a.budget)}</td><td>100%</td></tr></tfoot>
+    </table></div>
+    <div class="legend" style="padding:10px 16px"><span>開始率＝開始数／応募数</span><span>新規CPA＝広告予算 ${yen(a.budget)} ／新規応募</span><span>再応募・DBは広告費なし（CPA 0）</span></div>
+  </div>`;
+
+  /* ② 目標入力＋逆算結果 */
+  const input=`<div class="panel">
+    <div class="panel-head"><h2>② 目標開始数から逆算</h2><span class="hint">構成比・開始率・CPAは直近実績ベース</span></div>
+    <div style="padding:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <label style="font-size:13px;color:var(--navy);font-weight:700">目標開始数</label>
+      <input id="simTarget" type="number" min="0" step="1" value="${SIM.target}"
+        style="width:140px;padding:9px 12px;font-size:18px;font-weight:700;color:var(--navy);border:1px solid var(--line);border-radius:8px;text-align:right;font-variant-numeric:tabular-nums">
+      <span style="font-size:12px;color:var(--muted)">名／月</span>
+    </div>
+    <div id="simOut"></div>
+  </div>`;
+
+  view.innerHTML=actual+input;
+  const inp=$("#simTarget");
+  if(inp){ inp.addEventListener("input",()=>{ SIM.target=Math.max(0, Number(inp.value)||0); renderSimOut(b); }); }
+  renderSimOut(b);
+}
+/* 逆算結果テーブルのみ再描画（目標入力のたびに呼ぶ） */
+function renderSimOut(b){
+  const out=$("#simOut"); if(!out) return;
+  const c=simCompute(b, SIM.target||0);
+  const row=r=>`<tr>
+    <td class="l">${r.label}</td>
+    <td>${pct1(r.mix)}</td>
+    <td>${num(Math.round(r.start))}</td>
+    <td>${r.hasApp? num(Math.ceil(r.apps||0)) : "—"}</td>
+    <td>${r.rate!=null? pct1(r.rate) : "—"}</td>
+    <td>${r.cpa!=null? (r.cpa? yen(r.cpa):"—") : "—"}</td>
+    <td>${r.budget!=null? yen(r.budget) : "—"}</td></tr>`;
+  out.innerHTML=`<div class="scroll"><table>
+    <thead><tr><th class="l">経路</th><th>構成比</th><th>必要開始数</th><th>必要応募数</th><th>開始率</th><th>CPA</th><th>必要予算</th></tr></thead>
+    <tbody>${c.rows.map(row).join("")}</tbody>
+    <tfoot><tr><td class="l">合計</td><td>100%</td><td>${num(SIM.target||0)}</td><td>${num(Math.ceil(c.totApps))}</td><td>–</td><td>–</td><td>${yen(c.totBudget)}</td></tr></tfoot>
+  </table></div>
+  <div class="legend" style="padding:10px 16px"><span>必要応募数＝必要開始数／開始率</span><span>必要予算＝新規 必要応募数 × 新規CPA（再応募・DBは広告費0）</span></div>`;
+}
+
 /* ===== セクション切替（サイドバー） ===== */
 const SECMETA={
   office:{title:"応募ダッシュボード",sub:"オフィス別｜総応募・MCG・人選を突合した集計ビュー"},
   media:{title:"媒体別パフォーマンス",sub:"応募媒体ごと｜オフィス別の内訳まで（Indeed・キューメイトは統合）"},
   selection:{title:"人選別",sub:"人選グレード×新規/再応募｜オフィス・エリア小計／詳細で稼働率・応募者明細"},
   analysis:{title:"分析",sub:"LTV分析（180日前〜20日前）｜応募→各ステージの平均経過日数・オフィス/エリア小計"},
+  simulation:{title:"シミュレーション",sub:"直近2ヶ月の実績（経路別 開始/応募/CPA）から、目標開始数に必要な応募数・予算を逆算"},
 };
-const SECID={office:"officeSection",media:"mediaSection",selection:"selectionSection",analysis:"analysisSection"};
+const SECID={office:"officeSection",media:"mediaSection",selection:"selectionSection",analysis:"analysisSection",simulation:"simulationSection"};
 function switchSection(sec){
   Object.keys(SECID).forEach(k=>$("#"+SECID[k]).classList.toggle("hidden",k!==sec));
   $("#navOffice").classList.toggle("active",sec==="office");
   $("#navMedia").classList.toggle("active",sec==="media");
   $("#navSel").classList.toggle("active",sec==="selection");
   $("#navAna").classList.toggle("active",sec==="analysis");
+  $("#navSim").classList.toggle("active",sec==="simulation");
   $("#secTitle").textContent=SECMETA[sec].title; $("#secSub").textContent=SECMETA[sec].sub;
   ensureSection(sec); // 初回のみ描画（遅延描画）
   if(sec==="media") showMediaList();
@@ -967,12 +1116,14 @@ function ensureSection(sec){
   else if(sec==="media") renderMediaList();
   else if(sec==="selection") renderSelList();
   else if(sec==="analysis"){ renderAnalysis(); loadAnalysis().then(renderAnalysis); }
+  else if(sec==="simulation"){ renderSimulation(); loadSimulation().then(renderSimulation); }
 }
 
 function activeSection(){
   if(!$("#mediaSection").classList.contains("hidden")) return "media";
   if(!$("#selectionSection").classList.contains("hidden")) return "selection";
   if(!$("#analysisSection").classList.contains("hidden")) return "analysis";
+  if(!$("#simulationSection").classList.contains("hidden")) return "simulation";
   return "office";
 }
 function render(){
@@ -1014,6 +1165,7 @@ $("#navOffice").addEventListener("click",()=>switchSection("office"));
 $("#navMedia").addEventListener("click",()=>switchSection("media"));
 $("#navSel").addEventListener("click",()=>switchSection("selection"));
 $("#navAna").addEventListener("click",()=>switchSection("analysis"));
+$("#navSim").addEventListener("click",()=>switchSection("simulation"));
 $("#exportSelBtn").addEventListener("click",()=>{
   if(!API_URL){ alert("API未設定のため出力できません（モックデータ表示中）"); return; }
   window.open(`${API_URL}?export=selection`,"_blank");
