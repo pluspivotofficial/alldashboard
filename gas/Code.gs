@@ -401,9 +401,10 @@ function runDailyAggregation(monthArg) {
   const hasReapply = Object.keys(reapplyByPhone).length > 0; // _7がある時のみ再応募を_7基準に切替
 
   // 設定数/開始数・④開始の応募月分布(新規/再応募)・オフィス別の歩留(③)は「稼働データ(全期間)」基準で集計。
-  // _7がある場合は当月再応募者を稼働データ側でスキップ（_7基準で別途集計＝二重計上防止）。
+  // _7に載っている再応募者だけ稼働データ側でスキップ（_7基準で別集計＝二重計上防止）。
+  // _7に無い再応募者はこれまで通り稼働データで集計（＝従来ルールを継続適用）＋「未取得」一覧にも表示。
   const mcgPhoneSet = new Set(); // 稼働データ(②)に存在する電話 → 未登録者の割り出しに使う
-  try { fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, lastDateByPhone, mcgPhoneSet, hasReapply ? rePhoneInMonth : null); }
+  try { fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, lastDateByPhone, mcgPhoneSet, hasReapply ? reapplyByPhone : null); }
   catch (e) { Logger.log('activity-from-history skipped: ' + e); }
 
   // 再応募者(_7)を集計に反映（人選/接触/歩留/開始/名簿）
