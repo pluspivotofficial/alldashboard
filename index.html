@@ -953,16 +953,17 @@ function simPrevMonth(m){
   const d=new Date(p[0], p[1]-2, 1);   // 1ヶ月前（month は1始まり→-2）
   return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");
 }
-/* 1ヶ月のサマリーJSON → オフィス別の経路別実績（有料/無料は媒体単位の予算>0で判定） */
+/* 1ヶ月のサマリーJSON → オフィス別の経路別実績（有料/無料は媒体単位の予算>0で判定）。
+   純新規開始の有料/無料分割は、その月に report2.newPaid/newFree があれば実データ、
+   無ければ「その月の応募比」で按分（月ごとにフォールバック＝混在しても合算が整合する）。 */
 function simScopeFromSummary(j){
   const off={};
-  const mk=()=>({newStart:0,reStart:0,dbStart:0,reApps:0,started:0,paidNewApps:0,freeNewApps:0,paidBudget:0,newPaidStart:0,newFreeStart:0,area:""});
+  const mk=()=>({newStart:0,reStart:0,dbStart:0,reApps:0,started:0,paidNewApps:0,freeNewApps:0,paidBudget:0,newPaidStart:0,newFreeStart:0,rawPaid:null,rawFree:0,area:""});
   (j.offices||[]).forEach(o=>{
     const b=off[o.office]||(off[o.office]=mk());
     const r=o.report2||{}, v=o.overview||{};
     b.newStart += (r.curNew||0)+(r.prevNew||0);   // 新規経由＝当月内純新規＋前月純新規
-    b.newPaidStart += (r.newPaid||0);              // 純新規開始のうち有料媒体（GAS新版のみ・無ければ0→按分）
-    b.newFreeStart += (r.newFree||0);              // 純新規開始のうち無料媒体
+    if(r.newPaid!==undefined || r.newFree!==undefined){ b.rawPaid=(b.rawPaid||0)+(r.newPaid||0); b.rawFree+=(r.newFree||0); } // 媒体別の実開始数（新版）
     b.reStart  += (r.re||0);                       // 再応募経由
     b.dbStart  += (r.db||0);                       // DB経由（その他）
     b.reApps   += v.reApplications||0;
@@ -977,7 +978,14 @@ function simScopeFromSummary(j){
       if(paid){ b.paidNewApps+=na; b.paidBudget+=bud; } else { b.freeNewApps+=na; }
     });
   });
-  return {month:j.month, offices:off};
+  // この月ぶんの有料/無料 開始数を確定（実データ優先・無ければ当月の応募比で按分）
+  let exact=true;
+  Object.keys(off).forEach(on=>{
+    const b=off[on];
+    if(b.rawPaid!=null){ b.newPaidStart=b.rawPaid; b.newFreeStart=b.rawFree; }
+    else { const na=b.paidNewApps+b.freeNewApps, ps=na? b.paidNewApps/na : 0; b.newPaidStart=b.newStart*ps; b.newFreeStart=b.newStart*(1-ps); if(b.newStart>0) exact=false; }
+  });
+  return {month:j.month, offices:off, exact:exact};
 }
 async function loadSimulation(force){
   const cur=$("#monthSel").value;
@@ -1009,10 +1017,8 @@ function simAgg(officeKey){
    （GAS新版：report2.newPaid/newFree。旧データで欠損時は応募比で按分にフォールバック） */
 function simBasisFrom(a){
   const newApps=a.paidNewApps+a.freeNewApps;
-  const splitTotal=a.newPaidStart+a.newFreeStart;
-  let paidNewStart, freeNewStart, exactSplit;
-  if(splitTotal>0){ paidNewStart=a.newPaidStart; freeNewStart=a.newFreeStart; exactSplit=true; }  // 媒体別の実開始数
-  else { const paidShare=newApps? a.paidNewApps/newApps : 0; paidNewStart=a.newStart*paidShare; freeNewStart=a.newStart*(1-paidShare); exactSplit=false; }
+  const paidNewStart=a.newPaidStart, freeNewStart=a.newFreeStart;   // simScopeで月ごとに確定済み
+  const exactSplit=SIM.scopes.every(s=>s.exact);                     // 全対象月が媒体別実データなら true
   const totalStart=a.newStart+a.reStart+a.dbStart;
   return {
     agg:a, totalStart, newApps, paidNewStart, freeNewStart, exactSplit,
@@ -1062,7 +1068,7 @@ function simActualTable(b, mLabels){
       </tbody>
       <tfoot><tr><td class="l">合計</td><td>${num(b.totalStart)}</td><td>${num(b.newApps+a.reApps)}</td><td>–</td><td>${yen(a.paidBudget)}</td><td>100%</td></tr></tfoot>
     </table></div>
-    <div class="legend" style="padding:10px 16px"><span>開始率＝開始数／応募数</span><span>有料CPA＝広告予算 ${yen(a.paidBudget)} ／有料新規応募</span><span>無料媒体（自社・友人紹介等）・再応募・DBは広告費なし</span><span style="color:${b.exactSplit?'var(--muted)':'var(--coral)'}">${b.exactSplit?'有料/無料の開始率は媒体別実績':'※有料/無料の開始数は応募比で按分（集計更新で実績化）'}</span></div>`;
+    <div class="legend" style="padding:10px 16px"><span>開始率＝開始数／応募数</span><span>有料CPA＝広告予算 ${yen(a.paidBudget)} ／有料新規応募</span><span>無料媒体（自社・友人紹介等）・再応募・DBは広告費なし</span><span style="color:${b.exactSplit?'var(--muted)':'var(--coral)'}">${b.exactSplit?'有料/無料の開始率は媒体別の実開始数ベース':'※一部の月は媒体別データ未取得のため応募比で按分（該当月の集計実行で実績化）'}</span></div>`;
 }
 /* 逆算結果テーブル（目標入力のたびに再描画） */
 function simOutTable(b, target){
