@@ -943,28 +943,39 @@ function renderAnalysis(){
     `<p class="updated">分析生成: ${new Date(a.generatedAt).toLocaleString("ja-JP")}（履歴 ${num(a.records)}件）</p>`;
 }
 
-/* ===== シミュレーション（経路別 必要応募数・予算の逆算） ===== */
-/* SIM.months: 直近2ヶ月分の経路別実績（新規/再応募/DB）。target: 目標開始数（入力値を保持） */
-let SIM={loading:false, loaded:null, months:[], error:null, target:null};
+/* ===== シミュレーション（経路別 必要応募数・予算の逆算） =====
+   経路: 新規(有料媒体) / 新規(無料媒体:自社・友人紹介等) / 再応募 / DB
+   scopes: 直近2ヶ月分。各月 offices[オフィス名]={経路別実績}。全国は全オフィス合算。
+   target: 全国の目標開始数、officeTarget: オフィス別の目標開始数（各入力値を保持） */
+let SIM={loading:false, loaded:null, scopes:[], error:null, target:null, office:"__ALL__", officeTarget:null};
 function simPrevMonth(m){
   const p=m.split("-").map(Number);
   const d=new Date(p[0], p[1]-2, 1);   // 1ヶ月前（month は1始まり→-2）
   return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");
 }
-/* 1ヶ月のサマリーJSON → 全国の経路別合計 */
-function simTotalsFromSummary(j){
-  let newStart=0, reStart=0, dbStart=0, newApps=0, reApps=0, started=0, budget=0;
+/* 1ヶ月のサマリーJSON → オフィス別の経路別実績（有料/無料は媒体単位の予算>0で判定） */
+function simScopeFromSummary(j){
+  const off={};
+  const mk=()=>({newStart:0,reStart:0,dbStart:0,reApps:0,started:0,paidNewApps:0,freeNewApps:0,paidBudget:0,area:""});
   (j.offices||[]).forEach(o=>{
-    const r=o.report2||{curNew:0,prevNew:0,re:0,db:0}, v=o.overview||{};
-    newStart += (r.curNew||0)+(r.prevNew||0);   // 新規経由＝当月内純新規＋前月純新規
-    reStart  += (r.re||0);                       // 再応募経由
-    dbStart  += (r.db||0);                       // DB経由（その他）
-    newApps  += v.newApplications||0;
-    reApps   += v.reApplications||0;
-    started  += v.startedMonth||0;
+    const b=off[o.office]||(off[o.office]=mk());
+    const r=o.report2||{}, v=o.overview||{};
+    b.newStart += (r.curNew||0)+(r.prevNew||0);   // 新規経由＝当月内純新規＋前月純新規
+    b.reStart  += (r.re||0);                       // 再応募経由
+    b.dbStart  += (r.db||0);                       // DB経由（その他）
+    b.reApps   += v.reApplications||0;
+    b.started  += v.startedMonth||0;
+    b.area = o.area||b.area;
   });
-  (j.media||[]).forEach(m=>{ budget += (m.overview&&m.overview.budget)||0; });  // 広告予算合計（新規経由のみに紐づく）
-  return {month:j.month, newStart, reStart, dbStart, newApps, reApps, started, budget};
+  (j.media||[]).forEach(m=>{
+    const paid = ((m.overview&&m.overview.budget)||0) > 0;   // 媒体単位で予算計上あり＝有料
+    (m.offices||[]).forEach(o=>{
+      const b=off[o.office]||(off[o.office]=mk());
+      const na=(o.overview&&o.overview.newApplications)||0, bud=(o.overview&&o.overview.budget)||0;
+      if(paid){ b.paidNewApps+=na; b.paidBudget+=bud; } else { b.freeNewApps+=na; }
+    });
+  });
+  return {month:j.month, offices:off};
 }
 async function loadSimulation(force){
   const cur=$("#monthSel").value;
@@ -972,29 +983,42 @@ async function loadSimulation(force){
   if(!API_URL){ SIM.error="API未設定"; return SIM; }
   SIM.loading=true; SIM.error=null;
   const wanted=[cur, simPrevMonth(cur)];
-  const months=[];
+  const scopes=[];
   for(const m of wanted){
-    try{ months.push(simTotalsFromSummary(await loadFromApi(m))); }
+    try{ scopes.push(simScopeFromSummary(await loadFromApi(m))); }
     catch(e){ /* その月のデータが無い場合はスキップ */ }
   }
-  SIM.months=months; SIM.loaded=cur; SIM.loading=false;
-  if(!months.length) SIM.error="対象月の実績データが取得できませんでした";
+  SIM.scopes=scopes; SIM.loaded=cur; SIM.loading=false;
+  SIM.target=null; SIM.officeTarget=null;   // 月変更時は目標を既定へ戻す
+  if(!scopes.length) SIM.error="対象月の実績データが取得できませんでした";
   return SIM;
 }
-/* 直近2ヶ月を合算し、経路別の構成比・開始率・CPAを算出 */
-function simBasis(){
-  const ks=["newStart","reStart","dbStart","newApps","reApps","budget","started"];
+/* オフィス選択（"__ALL__"=全国 or オフィス名）で直近2ヶ月を合算 */
+function simAgg(officeKey){
+  const ks=["newStart","reStart","dbStart","reApps","paidNewApps","freeNewApps","paidBudget","started"];
   const a={}; ks.forEach(k=>a[k]=0);
-  SIM.months.forEach(t=>ks.forEach(k=>a[k]+=t[k]||0));
+  SIM.scopes.forEach(sc=>{
+    if(officeKey==="__ALL__"){ Object.keys(sc.offices).forEach(on=>ks.forEach(k=>a[k]+=sc.offices[on][k]||0)); }
+    else if(sc.offices[officeKey]){ ks.forEach(k=>a[k]+=sc.offices[officeKey][k]||0); }
+  });
+  return a;
+}
+/* 合算値 → 経路別の構成比・開始率・CPA。新規開始は有料/無料の応募比で按分 */
+function simBasisFrom(a){
+  const newApps=a.paidNewApps+a.freeNewApps;
+  const paidShare=newApps? a.paidNewApps/newApps : 0;
+  const paidNewStart=a.newStart*paidShare, freeNewStart=a.newStart*(1-paidShare);
   const totalStart=a.newStart+a.reStart+a.dbStart;
   return {
-    months:SIM.months, totalStart, agg:a,
-    mixNew: totalStart? a.newStart/totalStart : 0,
-    mixRe:  totalStart? a.reStart /totalStart : 0,
-    mixDb:  totalStart? a.dbStart /totalStart : 0,
-    rateNew: a.newApps? a.newStart/a.newApps : 0,   // 開始率＝開始/応募
-    rateRe:  a.reApps ? a.reStart /a.reApps  : 0,
-    cpaNew:  a.newApps? a.budget  /a.newApps : 0,    // 新規CPA＝広告予算/新規応募
+    agg:a, totalStart, newApps, paidNewStart, freeNewStart,
+    mixPaid: totalStart? paidNewStart/totalStart : 0,
+    mixFree: totalStart? freeNewStart/totalStart : 0,
+    mixRe:   totalStart? a.reStart/totalStart : 0,
+    mixDb:   totalStart? a.dbStart/totalStart : 0,
+    ratePaid: a.paidNewApps? paidNewStart/a.paidNewApps : 0,   // 開始率＝開始/応募
+    rateFree: a.freeNewApps? freeNewStart/a.freeNewApps : 0,
+    rateRe:   a.reApps? a.reStart/a.reApps : 0,
+    cpaPaid:  a.paidNewApps? a.paidBudget/a.paidNewApps : 0,    // 有料CPA＝広告予算/有料新規応募
   };
 }
 const pct1 = r => (r==null||!isFinite(r)) ? "–" : (Math.round(r*1000)/10)+"%";
@@ -1007,49 +1031,80 @@ function simCompute(b, target){
     return {label, mix, start, apps, rate:hasApp?rate:null, cpa:hasApp?cpa:null, budget:bud, hasApp};
   };
   const rows=[
-    row("新規経由", b.mixNew, b.rateNew, b.cpaNew, true),
-    row("再応募経由", b.mixRe, b.rateRe, 0, true),
-    row("DB経由", b.mixDb, 0, 0, false),
+    row("新規・有料媒体", b.mixPaid, b.ratePaid, b.cpaPaid, true),
+    row("新規・無料媒体", b.mixFree, b.rateFree, 0, true),
+    row("再応募経由",     b.mixRe,   b.rateRe,   0, true),
+    row("DB経由",         b.mixDb,   0,          0, false),
   ];
   const totBudget=rows.reduce((s,r)=>s+(r.budget||0),0);
   const totApps  =rows.reduce((s,r)=>s+(r.apps||0),0);
   return {rows, totBudget, totApps};
 }
-function renderSimulation(){
-  const view=$("#simulationView");
-  if(SIM.loading || (!SIM.months.length && !SIM.error)){
-    view.innerHTML=`<div class="panel"><div style="padding:20px;color:var(--muted)">読み込み中…</div></div>`; return;
-  }
-  if(SIM.error || !SIM.months.length){
-    view.innerHTML=`<div class="panel"><div class="panel-head"><h2>シミュレーション</h2></div><div style="padding:16px;color:var(--muted)">実績データが取得できません。対象月の「🔄 集計実行」後にお試しください。<br><span style="font-size:11px">(${SIM.error||"データなし"})</span></div></div>`; return;
-  }
-  const b=simBasis();
-  const mLabels=SIM.months.map(m=>m.month).join("・");
+const simDefaultTarget = b => Math.max(10, Math.round((b.totalStart/Math.max(1,SIM.scopes.length))/10)*10);
+/* 実績テーブル（経路別 開始/応募/開始率/CPA/構成比） */
+function simActualTable(b, mLabels){
   const a=b.agg;
-  /* 既定の目標開始数：直近実績の月平均（10単位で丸め） */
-  if(SIM.target==null){ const avg=b.totalStart/SIM.months.length; SIM.target=Math.max(10, Math.round(avg/10)*10); }
-
-  /* ① 実績パネル（経路別 開始/応募/開始率/CPA/構成比） */
   const actRow=(label, start, apps, rate, cpav, mix, appTxt)=>`<tr>
     <td class="l">${label}</td><td>${num(Math.round(start))}</td><td>${appTxt!=null?appTxt:num(Math.round(apps))}</td>
     <td>${rate!=null?pct1(rate):"–"}</td><td>${cpav!=null?(cpav?yen(cpav):"–"):"–"}</td><td>${pct1(mix)}</td></tr>`;
-  const actual=`<div class="panel">
-    <div class="panel-head"><h2>① 直近実績（経路別）</h2><span class="hint">対象: ${mLabels}／${SIM.months.length}ヶ月合算</span></div>
-    <div class="scroll"><table>
+  return `<div class="scroll"><table>
       <thead><tr><th class="l">経路</th><th>開始数</th><th>応募数</th><th>開始率</th><th>CPA</th><th>構成比</th></tr></thead>
       <tbody>
-        ${actRow("新規経由", a.newStart, a.newApps, b.rateNew, b.cpaNew, b.mixNew)}
-        ${actRow("再応募経由", a.reStart, a.reApps, b.rateRe, 0, b.mixRe)}
-        ${actRow("DB経由", a.dbStart, 0, null, null, b.mixDb, "—")}
+        ${actRow("新規・有料媒体", b.paidNewStart, a.paidNewApps, b.ratePaid, b.cpaPaid, b.mixPaid)}
+        ${actRow("新規・無料媒体", b.freeNewStart, a.freeNewApps, b.rateFree, 0, b.mixFree)}
+        ${actRow("再応募経由",     a.reStart,      a.reApps,      b.rateRe,   0, b.mixRe)}
+        ${actRow("DB経由",         a.dbStart,      0,             null, null, b.mixDb, "—")}
       </tbody>
-      <tfoot><tr><td class="l">合計</td><td>${num(b.totalStart)}</td><td>${num(a.newApps+a.reApps)}</td><td>–</td><td>${yen(a.budget)}</td><td>100%</td></tr></tfoot>
+      <tfoot><tr><td class="l">合計</td><td>${num(b.totalStart)}</td><td>${num(b.newApps+a.reApps)}</td><td>–</td><td>${yen(a.paidBudget)}</td><td>100%</td></tr></tfoot>
     </table></div>
-    <div class="legend" style="padding:10px 16px"><span>開始率＝開始数／応募数</span><span>新規CPA＝広告予算 ${yen(a.budget)} ／新規応募</span><span>再応募・DBは広告費なし（CPA 0）</span></div>
-  </div>`;
+    <div class="legend" style="padding:10px 16px"><span>開始率＝開始数／応募数</span><span>有料CPA＝広告予算 ${yen(a.paidBudget)} ／有料新規応募</span><span>無料媒体（自社・友人紹介等）・再応募・DBは広告費なし</span></div>`;
+}
+/* 逆算結果テーブル（目標入力のたびに再描画） */
+function simOutTable(b, target){
+  const c=simCompute(b, target||0);
+  const row=r=>`<tr>
+    <td class="l">${r.label}</td><td>${pct1(r.mix)}</td><td>${num(Math.round(r.start))}</td>
+    <td>${r.hasApp? num(Math.ceil(r.apps||0)) : "—"}</td>
+    <td>${r.rate!=null? pct1(r.rate) : "—"}</td>
+    <td>${r.cpa!=null? (r.cpa? yen(r.cpa):"—") : "—"}</td>
+    <td>${r.budget!=null? yen(r.budget) : "—"}</td></tr>`;
+  return `<div class="scroll"><table>
+    <thead><tr><th class="l">経路</th><th>構成比</th><th>必要開始数</th><th>必要応募数</th><th>開始率</th><th>CPA</th><th>必要予算</th></tr></thead>
+    <tbody>${c.rows.map(row).join("")}</tbody>
+    <tfoot><tr><td class="l">合計</td><td>100%</td><td>${num(target||0)}</td><td>${num(Math.ceil(c.totApps))}</td><td>–</td><td>–</td><td>${yen(c.totBudget)}</td></tr></tfoot>
+  </table></div>
+  <div class="legend" style="padding:10px 16px"><span>必要応募数＝必要開始数／開始率</span><span>必要予算＝有料 必要応募数 × 有料CPA（無料・再応募・DBは広告費0）</span></div>`;
+}
+/* オフィス選択肢（OFFICE_ORDER順に、データのあるオフィスのみ） */
+function simOfficeOptions(){
+  const set={};
+  SIM.scopes.forEach(sc=>Object.keys(sc.offices).forEach(on=>set[on]=true));
+  const list=Object.keys(set).sort((x,y)=>{
+    const ix=OFFICE_ORDER.indexOf(shortOffice(x)), iy=OFFICE_ORDER.indexOf(shortOffice(y));
+    return (ix<0?99:ix)-(iy<0?99:iy);
+  });
+  return list;
+}
+function renderSimulation(){
+  const view=$("#simulationView");
+  if(SIM.loading || (!SIM.scopes.length && !SIM.error)){
+    view.innerHTML=`<div class="panel"><div style="padding:20px;color:var(--muted)">読み込み中…</div></div>`; return;
+  }
+  if(SIM.error || !SIM.scopes.length){
+    view.innerHTML=`<div class="panel"><div class="panel-head"><h2>シミュレーション</h2></div><div style="padding:16px;color:var(--muted)">実績データが取得できません。対象月の「🔄 集計実行」後にお試しください。<br><span style="font-size:11px">(${SIM.error||"データなし"})</span></div></div>`; return;
+  }
+  const mLabels=SIM.scopes.map(s=>s.month).join("・");
+  const b=simBasisFrom(simAgg("__ALL__"));
+  if(SIM.target==null) SIM.target=simDefaultTarget(b);
 
-  /* ② 目標入力＋逆算結果 */
+  /* ① 全国 実績 */
+  const actual=`<div class="panel">
+    <div class="panel-head"><h2>① 全国 直近実績（経路別）</h2><span class="hint">対象: ${mLabels}／${SIM.scopes.length}ヶ月合算</span></div>
+    ${simActualTable(b, mLabels)}
+  </div>`;
+  /* ② 全国 逆算 */
   const input=`<div class="panel">
-    <div class="panel-head"><h2>② 目標開始数から逆算</h2><span class="hint">構成比・開始率・CPAは直近実績ベース</span></div>
+    <div class="panel-head"><h2>② 全国 目標開始数から逆算</h2><span class="hint">構成比・開始率・CPAは直近実績ベース</span></div>
     <div style="padding:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <label style="font-size:13px;color:var(--navy);font-weight:700">目標開始数</label>
       <input id="simTarget" type="number" min="0" step="1" value="${SIM.target}"
@@ -1058,30 +1113,46 @@ function renderSimulation(){
     </div>
     <div id="simOut"></div>
   </div>`;
+  /* ③ オフィス別（セレクタで切替） */
+  const opts=simOfficeOptions().map(on=>`<option value="${on}"${on===SIM.office?" selected":""}>${on}</option>`).join("");
+  const officePanel=`<div class="panel">
+    <div class="panel-head"><h2>③ オフィス別シミュレーション</h2><span class="hint">選択オフィスの実績で同じ逆算</span></div>
+    <div style="padding:14px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <label style="font-size:13px;color:var(--navy);font-weight:700">オフィス</label>
+      <select id="simOfficeSel" style="padding:8px 12px;font-size:14px;border:1px solid var(--line);border-radius:8px;color:var(--navy);background:#fff">${opts}</select>
+    </div>
+    <div id="simOfficeBody"></div>
+  </div>`;
 
-  view.innerHTML=actual+input;
+  view.innerHTML=actual+input+officePanel;
   const inp=$("#simTarget");
-  if(inp){ inp.addEventListener("input",()=>{ SIM.target=Math.max(0, Number(inp.value)||0); renderSimOut(b); }); }
-  renderSimOut(b);
+  if(inp) inp.addEventListener("input",()=>{ SIM.target=Math.max(0,Number(inp.value)||0); $("#simOut").innerHTML=simOutTable(b,SIM.target); });
+  $("#simOut").innerHTML=simOutTable(b, SIM.target);
+
+  const sel=$("#simOfficeSel");
+  if(sel) sel.addEventListener("change",()=>{ SIM.office=sel.value; SIM.officeTarget=null; renderSimOffice(); });
+  renderSimOffice();
 }
-/* 逆算結果テーブルのみ再描画（目標入力のたびに呼ぶ） */
-function renderSimOut(b){
-  const out=$("#simOut"); if(!out) return;
-  const c=simCompute(b, SIM.target||0);
-  const row=r=>`<tr>
-    <td class="l">${r.label}</td>
-    <td>${pct1(r.mix)}</td>
-    <td>${num(Math.round(r.start))}</td>
-    <td>${r.hasApp? num(Math.ceil(r.apps||0)) : "—"}</td>
-    <td>${r.rate!=null? pct1(r.rate) : "—"}</td>
-    <td>${r.cpa!=null? (r.cpa? yen(r.cpa):"—") : "—"}</td>
-    <td>${r.budget!=null? yen(r.budget) : "—"}</td></tr>`;
-  out.innerHTML=`<div class="scroll"><table>
-    <thead><tr><th class="l">経路</th><th>構成比</th><th>必要開始数</th><th>必要応募数</th><th>開始率</th><th>CPA</th><th>必要予算</th></tr></thead>
-    <tbody>${c.rows.map(row).join("")}</tbody>
-    <tfoot><tr><td class="l">合計</td><td>100%</td><td>${num(SIM.target||0)}</td><td>${num(Math.ceil(c.totApps))}</td><td>–</td><td>–</td><td>${yen(c.totBudget)}</td></tr></tfoot>
-  </table></div>
-  <div class="legend" style="padding:10px 16px"><span>必要応募数＝必要開始数／開始率</span><span>必要予算＝新規 必要応募数 × 新規CPA（再応募・DBは広告費0）</span></div>`;
+/* ③ の中身（実績＋目標入力＋逆算）を選択オフィスで再描画 */
+function renderSimOffice(){
+  const body=$("#simOfficeBody"); if(!body) return;
+  if(SIM.office==="__ALL__" || !simOfficeOptions().includes(SIM.office)) SIM.office=simOfficeOptions()[0];
+  const b=simBasisFrom(simAgg(SIM.office));
+  const mLabels=SIM.scopes.map(s=>s.month).join("・");
+  if(SIM.officeTarget==null) SIM.officeTarget=simDefaultTarget(b);
+  body.innerHTML=`
+    <div style="padding:0 16px 4px;font-size:12px;color:var(--muted)">実績: ${mLabels}／${SIM.scopes.length}ヶ月合算</div>
+    ${simActualTable(b, mLabels)}
+    <div style="padding:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-top:1px solid var(--line)">
+      <label style="font-size:13px;color:var(--navy);font-weight:700">目標開始数（${shortOffice(SIM.office)}）</label>
+      <input id="simOfficeTarget" type="number" min="0" step="1" value="${SIM.officeTarget}"
+        style="width:130px;padding:9px 12px;font-size:18px;font-weight:700;color:var(--navy);border:1px solid var(--line);border-radius:8px;text-align:right;font-variant-numeric:tabular-nums">
+      <span style="font-size:12px;color:var(--muted)">名／月</span>
+    </div>
+    <div id="simOfficeOut"></div>`;
+  const inp=$("#simOfficeTarget");
+  if(inp) inp.addEventListener("input",()=>{ SIM.officeTarget=Math.max(0,Number(inp.value)||0); $("#simOfficeOut").innerHTML=simOutTable(b,SIM.officeTarget); });
+  $("#simOfficeOut").innerHTML=simOutTable(b, SIM.officeTarget);
 }
 
 /* ===== セクション切替（サイドバー） ===== */
