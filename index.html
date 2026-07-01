@@ -987,6 +987,36 @@ function simScopeFromSummary(j){
   });
   return {month:j.month, offices:off, exact:exact};
 }
+/* ==== 前月スナップショットの保存（localStorage・保存優先ロック） ====
+   予算やオフィス構成は月次でバージョン管理されず、過去月を再集計すると現在の
+   予算シートで上書きされる。そこで各月の集計スコープをブラウザに保存し、以後は
+   保存値を固定（ロック）して使う。ライブが変わっても上書きしない（手動更新のみ）。 */
+const SIM_STORE_KEY="simSnap:v1";
+function simLoadStore(){ try{ return JSON.parse(localStorage.getItem(SIM_STORE_KEY))||{}; }catch(e){ return {}; } }
+function simSaveStore(s){ try{ localStorage.setItem(SIM_STORE_KEY, JSON.stringify(s)); }catch(e){ /* 容量超過等は無視 */ } }
+function simGetSnap(month){ return simLoadStore()[month]||null; }
+function simSetSnap(month, scope){ const s=simLoadStore(); s[month]={scope:scope, savedAt:new Date().toISOString()}; simSaveStore(s); } // scopeはsimScopeFromSummaryの生成果（cleanなもの）を渡す
+function simDelSnap(month){ const s=simLoadStore(); delete s[month]; simSaveStore(s); }
+/* 保存値からスコープを復元（transient項目を再付与） */
+function simScopeFromSnap(month){
+  const snap=simGetSnap(month); if(!snap) return null;
+  const sc=JSON.parse(JSON.stringify(snap.scope)); sc.month=month; sc.source="saved"; sc.savedAt=snap.savedAt; return sc;
+}
+/* 保存優先：保存があれば保存値、無ければライブ取得して自動保存（ロック生成） */
+async function simEnsureMonth(m){
+  const saved=simScopeFromSnap(m); if(saved) return saved;
+  const fresh=simScopeFromSummary(await loadFromApi(m));   // ライブ
+  simSetSnap(m, fresh);                                     // 初回は自動保存＝ロック
+  return simScopeFromSnap(m);
+}
+/* 指定月をライブで再取得し保存を上書き（「最新で更新」ボタン用） */
+async function simRefreshMonth(m){
+  try{ simSetSnap(m, simScopeFromSummary(await loadFromApi(m))); }
+  catch(e){ alert("最新データの取得に失敗しました（"+m+"）: "+e.message); return; }
+  SIM.scopes=SIM.scopes.map(sc=> sc.month===m ? simScopeFromSnap(m) : sc);
+  SIM.target=null; SIM.officeTarget=null;
+  renderSimulation();
+}
 async function loadSimulation(force){
   const cur=$("#monthSel").value;
   if(SIM.loaded===cur && !force) return SIM;
@@ -995,12 +1025,12 @@ async function loadSimulation(force){
   const wanted=[cur, simPrevMonth(cur)];
   const scopes=[];
   for(const m of wanted){
-    try{ scopes.push(simScopeFromSummary(await loadFromApi(m))); }
-    catch(e){ /* その月のデータが無い場合はスキップ */ }
+    try{ const sc=await simEnsureMonth(m); if(sc) scopes.push(sc); }
+    catch(e){ const sc=simScopeFromSnap(m); if(sc) scopes.push(sc); } // ライブ失敗時も保存があれば使う
   }
   SIM.scopes=scopes; SIM.loaded=cur; SIM.loading=false;
   SIM.target=null; SIM.officeTarget=null;   // 月変更時は目標を既定へ戻す
-  if(!scopes.length) SIM.error="対象月の実績データが取得できませんでした";
+  if(!scopes.length) SIM.error="対象月の実績データが取得できませんでした（保存・ライブとも無し）";
   return SIM;
 }
 /* オフィス選択（"__ALL__"=全国 or オフィス名）で直近2ヶ月を合算 */
@@ -1108,6 +1138,25 @@ function renderSimulation(){
   const b=simBasisFrom(simAgg("__ALL__"));
   if(SIM.target==null) SIM.target=simDefaultTarget(b);
 
+  /* ⓪ 保存データ（ブラウザ・保存優先ロック）：各月の予算・オフィス・実績を固定 */
+  const snapRow=sc=>{
+    const saved=sc.source==="saved";
+    const when=sc.savedAt? new Date(sc.savedAt).toLocaleString("ja-JP") : "";
+    const badge=saved
+      ? `<span class="pill" style="background:#eef1fa;color:var(--navy-soft)">🔒 保存 ${when}</span>`
+      : `<span class="pill up">ライブ（未保存）</span>`;
+    return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 0;border-bottom:1px solid var(--line)">
+      <b style="width:78px;color:var(--navy)">${sc.month}</b>${badge}
+      <button class="catbtn simRefresh" data-m="${sc.month}" title="ライブの最新データで保存を上書き">🔄 最新で更新</button>
+    </div>`;
+  };
+  const snapPanel=`<div class="panel">
+    <div class="panel-head"><h2>💾 保存データ（ブラウザ）</h2><span class="hint">保存優先：一度保存した月は固定して使用（予算・オフィス改定の影響を受けません）</span></div>
+    <div style="padding:6px 16px 12px">${SIM.scopes.map(snapRow).join("")}
+      <div style="font-size:11px;color:var(--muted);margin-top:8px">この端末のブラウザに保存されます。前月を再集計・予算改定しても、ここで「最新で更新」しない限り数値は変わりません。</div>
+    </div>
+  </div>`;
+
   /* ① 全国 実績 */
   const actual=`<div class="panel">
     <div class="panel-head"><h2>① 全国 直近実績（経路別）</h2><span class="hint">対象: ${mLabels}／${SIM.scopes.length}ヶ月合算</span></div>
@@ -1135,7 +1184,12 @@ function renderSimulation(){
     <div id="simOfficeBody"></div>
   </div>`;
 
-  view.innerHTML=actual+input+officePanel;
+  view.innerHTML=snapPanel+actual+input+officePanel;
+  document.querySelectorAll(".simRefresh").forEach(btn=>btn.addEventListener("click",async()=>{
+    const m=btn.dataset.m, label=btn.textContent; btn.disabled=true; btn.textContent="更新中…";
+    await simRefreshMonth(m); // 内部で renderSimulation を呼ぶ（成功時）。失敗時はここへ戻る
+    btn.disabled=false; btn.textContent=label;
+  }));
   const inp=$("#simTarget");
   if(inp) inp.addEventListener("input",()=>{ SIM.target=Math.max(0,Number(inp.value)||0); $("#simOut").innerHTML=simOutTable(b,SIM.target); });
   $("#simOut").innerHTML=simOutTable(b, SIM.target);
@@ -1234,9 +1288,11 @@ $("#aggBtn").addEventListener("click",async()=>{
   btn.disabled=true; btn.textContent="集計中…";
   $("#updated").textContent="集計実行中…（稼働データを読み込むため30秒〜1分ほどかかります）";
   try{
-    const res=await fetch(`${API_URL}?run=aggregate&month=${encodeURIComponent($("#monthSel").value)}&t=${Date.now()}`);
+    const aggMonth=$("#monthSel").value;
+    const res=await fetch(`${API_URL}?run=aggregate&month=${encodeURIComponent(aggMonth)}&t=${Date.now()}`);
     const j=await res.json();
     if(!j.ok){ $("#updated").textContent="集計に失敗: "+(j.error||"unknown"); return; }
+    try{ simDelSnap(aggMonth); SIM.loaded=null; }catch(e){} // 集計実行＝この月を更新した意思表示。保存ロック解除＋シミュレーション再読込を促し最新を再保存
     await refresh(); // 最新サマリーを取得して再描画
   }catch(err){ $("#updated").textContent="集計に失敗: "+err.message; }
   finally{ btn.disabled=false; btn.textContent=label; }
