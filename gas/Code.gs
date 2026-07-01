@@ -404,7 +404,9 @@ function runDailyAggregation(monthArg) {
   // _7に載っている再応募者だけ稼働データ側でスキップ（_7基準で別集計＝二重計上防止）。
   // _7に無い再応募者はこれまで通り稼働データで集計（＝従来ルールを継続適用）＋「未取得」一覧にも表示。
   const mcgPhoneSet = new Set(); // 稼働データ(②)に存在する電話 → 未登録者の割り出しに使う
-  try { fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, lastDateByPhone, mcgPhoneSet, hasReapply ? reapplyByPhone : null); }
+  const budget = loadMediaBudget_(prefToOffice); // 媒体予算（CPA算出用・県名は集約先オフィスへ寄せる）。開始の有料/無料判定にも使う
+  const paidMediaSet = {}; Object.keys(budget.byMedia).forEach(m => { if (budget.byMedia[m] > 0) paidMediaSet[m] = true; }); // 予算計上あり＝有料媒体
+  try { fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, lastDateByPhone, mcgPhoneSet, hasReapply ? reapplyByPhone : null, paidMediaSet); }
   catch (e) { Logger.log('activity-from-history skipped: ' + e); }
 
   // 再応募者(_7)を集計に反映（人選/接触/歩留/開始/名簿）
@@ -454,7 +456,6 @@ function runDailyAggregation(monthArg) {
     const dm = mediaDailyMap[media] || {};
     return Object.keys(dm).sort().map(k => ({ date: k, new: dm[k].new, re: dm[k].re, total: dm[k].new + dm[k].re, ab: dm[k].ab }));
   };
-  const budget = loadMediaBudget_(prefToOffice); // 媒体予算（CPA算出用・県名は集約先オフィスへ寄せる）
   const mediaOut = Object.keys(mediaMap).map(media => {
     const bmo = budget.byMediaOffice[media] || {};
     const offices = Object.keys(mediaMap[media]).map(office => {
@@ -844,7 +845,7 @@ function newOfficeAcc_(office, prefs, target, area) {
     startedApply: {}, // 当月に開始した人の「応募月(yyyy-MM)→件数」分布（④用）
     startedList: [],  // 当月に開始した稼働者の名簿（④下部の一覧用）
     report1: { junNew: 0, re: 0 },                       // ①当月応募 純新規/再応募（電話ユニーク）
-    report2: { curNew: 0, prevNew: 0, re: 0, db: 0 },    // ②開始の内訳（当月内純新規/前月純新規/前月当月再応募/その他DB）
+    report2: { curNew: 0, prevNew: 0, re: 0, db: 0, newPaid: 0, newFree: 0 }, // ②開始の内訳（当月内純新規/前月純新規/前月当月再応募/その他DB）＋純新規開始の有料/無料媒体内訳
     applicants: [], // A/B/C の応募者明細（条件フラグ付き）
   };
 }
@@ -1091,7 +1092,7 @@ function processReapplicants_(acc, reapplyByPhone, prefToOffice, range) {
   });
 }
 
-function fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, lastDateByPhone, mcgPhoneSet, reSkipPhones) {
+function fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, lastDateByPhone, mcgPhoneSet, reSkipPhones, paidMediaSet) {
   firstDateByPhone = firstDateByPhone || {};
   lastDateByPhone = lastDateByPhone || {};
   const curKey = Utilities.formatDate(range.monthStart, CONFIG.TZ, 'yyyy-MM');     // 当月
@@ -1127,6 +1128,10 @@ function fillActivityFromHistory_(acc, prefToOffice, range, firstDateByPhone, la
       else if (!isRe && k === prevKey) r2.prevNew += 1;
       else if (isRe && (k === curKey || k === prevKey)) r2.re += 1;
       else r2.db += 1;
+      // 純新規開始（curNew/prevNew）を有料/無料媒体で分割 → 経路別の真の開始率算出に使う
+      if (!isRe && (k === curKey || k === prevKey)) {
+        if (paidMediaSet && paidMediaSet[normMedia_(row[MCGI.media])]) r2.newPaid += 1; else r2.newFree += 1;
+      }
       // ④下部の名簿（当月に開始した稼働者）
       acc[office].startedList.push({
         name: (row[1] || '').toString().trim(),
