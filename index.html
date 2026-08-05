@@ -492,8 +492,8 @@ function renderUnregistered(){
   const rows=(u.list||[]).map(p=>`<tr><td class="l">${p.office||"-"}</td><td>${p.name||"-"}</td><td>${p.phone||"-"}</td><td>${p.media||"-"}</td></tr>`).join("");
   el.innerHTML=`<div class="alert">
     <div class="alert-head" id="alertToggle">
-      <h2>⚠️ 前日の未登録者</h2><span class="big">${num(u.total)}名</span>
-      <span class="date">${u.date} 応募／総応募にあり・稼働データ(MCG)に電話なし</span>
+      <h2>⚠️ 前日の未登録者（新規のみ）</h2><span class="big">${num(u.total)}名</span>
+      <span class="date">${u.date} 応募／新規応募・稼働データ(MCG)に電話なし（再応募は除外）</span>
       <span class="tg">${unregOpen?"▲ 閉じる":"▼ 明細を見る"}</span>
     </div>
     <div class="alert-chips">${chips}</div>
