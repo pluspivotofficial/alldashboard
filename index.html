@@ -205,6 +205,11 @@
   .nav-item{display:block;width:100%;text-align:left;background:transparent;border:none;color:#cfd6ee;font:inherit;font-weight:600;font-size:13px;padding:10px 12px;border-radius:8px;cursor:pointer;margin-bottom:4px}
   .nav-item:hover{background:rgba(255,255,255,.08);color:#fff}
   .nav-item.active{background:#fff;color:var(--navy)}
+  .nav-divider{color:#8e97bd;font-size:10.5px;font-weight:700;letter-spacing:.08em;padding:12px 12px 5px;margin-top:8px;border-top:1px solid rgba(255,255,255,.12)}
+  .embed-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:12.5px;color:var(--muted)}
+  .embed-open{color:var(--navy);font-weight:700;text-decoration:none;white-space:nowrap}
+  .embed-open:hover{text-decoration:underline}
+  .embed-frame{width:100%;height:calc(100vh - 180px);min-height:560px;border:1px solid var(--line);border-radius:12px;background:#fff;display:block}
   .main{flex:1 1 auto;min-width:0}
   .main .wrap{margin:0}
   @media(max-width:720px){
@@ -225,6 +230,9 @@
     <button class="nav-item" id="navAna" data-sec="analysis">📈 分析</button>
     <button class="nav-item" id="navTrend" data-sec="trends">🗓️ 月次推移</button>
     <button class="nav-item" id="navSim" data-sec="simulation">🎯 シミュレーション</button>
+    <div class="nav-divider">データ投入</div>
+    <button class="nav-item" id="navApply" data-sec="apply">📥 応募投入</button>
+    <button class="nav-item" id="navSenbatsu" data-sec="senbatsu">👤 人選投入</button>
   </aside>
   <div class="main"><div class="wrap">
   <header class="top">
@@ -300,6 +308,20 @@
   <!-- ===== シミュレーションセクション ===== -->
   <div id="simulationSection" class="hidden">
     <div id="simulationView"></div>
+  </div>
+
+  <!-- ===== 応募投入（obo-data-tool を埋め込み）===== -->
+  <div id="applySection" class="hidden">
+    <div class="embed-bar"><span>複数媒体のCSVをまとめて「連携」まで。連携後、オフィス別などで「🔄 集計実行」を押すと反映されます。</span>
+      <a class="embed-open" href="https://pluspivotofficial.github.io/obo-data-tool/" target="_blank" rel="noopener">別タブで開く ↗</a></div>
+    <iframe id="applyFrame" class="embed-frame" title="応募データ統合ツール" data-src="https://pluspivotofficial.github.io/obo-data-tool/"></iframe>
+  </div>
+
+  <!-- ===== 人選投入（senbatsu.html を埋め込み）===== -->
+  <div id="senbatsuSection" class="hidden">
+    <div class="embed-bar"><span>当月の人選CSV（＋任意で再応募CSV）を取り込み。取込後、稼働データ投入のうえ「🔄 集計実行」で反映されます。</span>
+      <a class="embed-open" href="senbatsu.html" target="_blank" rel="noopener">別タブで開く ↗</a></div>
+    <iframe id="senbatsuFrame" class="embed-frame" title="人選データ取り込み" data-src="senbatsu.html"></iframe>
   </div>
 
   <p class="updated" id="updated"></p>
@@ -534,7 +556,7 @@ function renderChart(){
 
 /* ---- 一覧テーブル（人選数つき・クリックで詳細） ---- */
 const AREA_ORDER=["東北","関東","中日本","関西","九州"];
-const OFFICE_ORDER=["仙台","盛岡","青森","山形","新宿","千葉","横浜","高崎","名古屋","金沢","新潟","梅田","神戸","京都","福岡","鹿児島"];
+const OFFICE_ORDER=["仙台","盛岡","青森","山形","郡山","新宿","千葉","横浜","高崎","大宮","水戸","名古屋","金沢","新潟","静岡","梅田","神戸","京都","奈良","福岡","鹿児島","熊本"];
 const shortOffice=n=>(n||"").replace(/オフィス$/,""); // 一覧の幅圧縮：末尾の「オフィス」を除去
 const officeOrderIdx=o=>{const i=OFFICE_ORDER.indexOf(shortOffice(o.office));return i<0?99:i;};
 const areaOrderIdx=a=>{const i=AREA_ORDER.indexOf(a);return i<0?99:i;};
@@ -1569,8 +1591,10 @@ const SECMETA={
   analysis:{title:"分析",sub:"LTV分析（180日前〜20日前）｜応募→各ステージの平均経過日数・オフィス/エリア小計"},
   trends:{title:"月次推移",sub:"起点月〜当月の推移｜指標別に全国・エリア別・オフィス別の月次サマリー"},
   simulation:{title:"シミュレーション",sub:"直近2ヶ月の実績（経路別 開始/応募/CPA）から、目標開始数に必要な応募数・予算を逆算"},
+  apply:{title:"応募投入",sub:"応募データ統合ツール｜複数媒体CSVをまとめてダッシュボードへ連携"},
+  senbatsu:{title:"人選投入",sub:"人選データ取り込み｜当月人選CSV（＋再応募）を取込み人選ｽﾃｰﾀｽを自動判定"},
 };
-const SECID={office:"officeSection",media:"mediaSection",selection:"selectionSection",analysis:"analysisSection",trends:"trendsSection",simulation:"simulationSection"};
+const SECID={office:"officeSection",media:"mediaSection",selection:"selectionSection",analysis:"analysisSection",trends:"trendsSection",simulation:"simulationSection",apply:"applySection",senbatsu:"senbatsuSection"};
 function switchSection(sec){
   Object.keys(SECID).forEach(k=>$("#"+SECID[k]).classList.toggle("hidden",k!==sec));
   $("#navOffice").classList.toggle("active",sec==="office");
@@ -1579,12 +1603,16 @@ function switchSection(sec){
   $("#navAna").classList.toggle("active",sec==="analysis");
   $("#navTrend").classList.toggle("active",sec==="trends");
   $("#navSim").classList.toggle("active",sec==="simulation");
+  $("#navApply").classList.toggle("active",sec==="apply");
+  $("#navSenbatsu").classList.toggle("active",sec==="senbatsu");
   $("#secTitle").textContent=SECMETA[sec].title; $("#secSub").textContent=SECMETA[sec].sub;
   ensureSection(sec); // 初回のみ描画（遅延描画）
   if(sec==="media") showMediaList();
   else if(sec==="selection") showSelList();
   else if(sec==="office") showList();
 }
+/* 埋め込みiframeは初回表示時にだけ読み込む（初期ロードを軽く保つ） */
+function lazyFrame(id){ const f=$("#"+id); if(f && !f.getAttribute("src") && f.dataset.src) f.setAttribute("src",f.dataset.src); }
 
 /* 遅延描画：現在のDATAに対して各セクションを1度だけ描画する */
 let SECTION_RENDERED={};
@@ -1597,6 +1625,8 @@ function ensureSection(sec){
   else if(sec==="analysis"){ renderAnalysis(); loadAnalysis().then(renderAnalysis); }
   else if(sec==="trends"){ renderTrends(); loadTrends().then(renderTrends); }
   else if(sec==="simulation"){ renderSimulation(); loadSimulation().then(renderSimulation); }
+  else if(sec==="apply"){ lazyFrame("applyFrame"); }
+  else if(sec==="senbatsu"){ lazyFrame("senbatsuFrame"); }
 }
 
 function activeSection(){
@@ -1605,6 +1635,8 @@ function activeSection(){
   if(!$("#analysisSection").classList.contains("hidden")) return "analysis";
   if(!$("#trendsSection").classList.contains("hidden")) return "trends";
   if(!$("#simulationSection").classList.contains("hidden")) return "simulation";
+  if(!$("#applySection").classList.contains("hidden")) return "apply";
+  if(!$("#senbatsuSection").classList.contains("hidden")) return "senbatsu";
   return "office";
 }
 function render(){
@@ -1666,6 +1698,8 @@ $("#navSel").addEventListener("click",()=>switchSection("selection"));
 $("#navAna").addEventListener("click",()=>switchSection("analysis"));
 $("#navTrend").addEventListener("click",()=>switchSection("trends"));
 $("#navSim").addEventListener("click",()=>switchSection("simulation"));
+$("#navApply").addEventListener("click",()=>switchSection("apply"));
+$("#navSenbatsu").addEventListener("click",()=>switchSection("senbatsu"));
 $("#exportSelBtn").addEventListener("click",()=>{
   if(!API_URL){ alert("API未設定のため出力できません（モックデータ表示中）"); return; }
   window.open(`${API_URL}?export=selection`,"_blank");
